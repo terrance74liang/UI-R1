@@ -37,7 +37,7 @@ images/:
 	image2.png
 ```
 
-```json
+```
 test.json:
 [
 	{
