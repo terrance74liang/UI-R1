@@ -6,9 +6,14 @@
 
 We propose **UI-R1**, the first framework to explore how rule-based RL can enhance the reasoning capabilities of multimodal large language models (MLLMs) for GUI action prediction tasks.
 
-
+<a href="">
+  <img src="assets/radar.png" alt="Logo" >
+</a>
 
 Experimental results demonstrate that our proposed \textbf{UI-R1-3B} achieves significant improvements over the base model (i.e. Qwen2.5-VL-3B) on both in-domain (ID) and out-of-domain (OOD) tasks, with average accuracy gains of **22.1%** on ScreenSpot, **6.0%** on ScreenSpot-Pro, and **12.7%** on AndroidControl. Furthermore, UI-R1-3B delivers competitive performance compared to larger models (e.g., OS-Atlas-7B) trained via supervised fine-tuning (SFT) on 76K samples.
+
+<a href="">
+  <img src="assets/method.png" alt="Logo" >
 
 
 
@@ -20,20 +25,19 @@ conda activate ui-r1
 bash setup.sh
 ```
 
-
-
 ## Data
 
 Our training mobile data is a subset from AndroidControl and ScreenSpot.
 
-We put our 136 training data here.
-
 You can also prepare your training or inference data like:
 
-```json
+```
 images/:
-	--image1.png,
-	--image2.png
+	image1.png
+	image2.png
+```
+
+```json
 test.json:
 [
 	{
@@ -72,8 +76,6 @@ bash test.sh
 
 Please fill the MODEL_PATH, IMG_PATH, TEST_JSON with your real checkpoint path and data path.
 
-
-
 ## Training
 
 ```shell
@@ -89,10 +91,25 @@ bash screenspot.sh
 - **`2025-03-30`**: We release the UI-R1 repository.
 - **`2025-03-27`**: We release our [paper](https://arxiv.org/abs/2503.21620).
 
+
+
+
+
 ## Citation
 
 If you find this project useful, welcome to cite us.
 
+```bit
+@article{lu2025ui,
+  title={UI-R1: Enhancing Action Prediction of GUI Agents by Reinforcement Learning},
+  author={Lu, Zhengxi and Chai, Yuxiang and Guo, Yaxuan and Yin, Xi and Liu, Liang and Wang, Hao and Xiong, Guanjing and Li, Hongsheng},
+  journal={arXiv preprint arXiv:2503.21620},
+  year={2025}
+}
+```
+
 
 
 ## 🤝 Acknowledgements
+
+We sincerely thank projects [R1-V](https://github.com/Deep-Agent/R1-V), [Open-R1](https://github.com/huggingface/open-r1), and [Open-r1-multimodal](https://github.com/EvolvingLMMs-Lab/open-r1-multimodal), [VLM-R1](https://github.com/om-ai-lab/VLM-R1) for providing their open-source resources.
