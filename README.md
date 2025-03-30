@@ -32,8 +32,8 @@ You can also prepare your training or inference data like:
 
 ```json
 images/:
-	image1.png
-	image2.png
+	--image1.png,
+	--image2.png
 test.json:
 [
 	{
