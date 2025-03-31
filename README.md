@@ -79,7 +79,7 @@ Please fill the MODEL_PATH, IMG_PATH, TEST_JSON with your real checkpoint path a
 
 ```shell
 cd src/script/
-bash screenspot.sh
+bash train.sh
 ```
 
 
