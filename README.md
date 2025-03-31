@@ -75,13 +75,13 @@ bash test.sh
 ```
 
 Please fill the MODEL_PATH, IMG_PATH, TEST_JSON with your real checkpoint path and data path.
-
 ## Training
 
 ```shell
 cd src/script/
 bash screenspot.sh
 ```
+
 
 
 
