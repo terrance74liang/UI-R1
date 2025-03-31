@@ -95,7 +95,7 @@ bash screenspot.sh
 
 
 
-## Citation
+## ⭐️ Citation
 
 If you find this project useful, welcome to cite us.
 
