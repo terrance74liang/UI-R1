@@ -86,7 +86,7 @@ bash train.sh
 
 
 ## 🗞️ News
-- **`2025-03-30`**: We release the [datasets](https://huggingface.co/datasets/LZXzju/UI-R1-3B-Train) of the UI-R1-3B model.
+- **`2025-04-02`**: We release the [datasets](https://huggingface.co/datasets/LZXzju/UI-R1-3B-Train) of the UI-R1-3B model.
 - **`2025-03-30`**: We release the [checkpoints](https://huggingface.co/LZXzju/Qwen2.5-VL-3B-UI-R1) of the UI-R1-3B model.
 - **`2025-03-30`**: We release the UI-R1 repository.
 - **`2025-03-27`**: We release our [paper](https://arxiv.org/abs/2503.21620).
