@@ -73,7 +73,7 @@ def run(rank, world_size, args):
         print(f"Process {rank} handling {len(data)} samples", flush=True)
 
         for j, item in tqdm(enumerate(data), total=len(data)):
-            image_path = os.path.join(image_dir, item["img_filename"]
+            image_path = os.path.join(image_dir, item["img_filename"])
             task_prompt = item["instruction"]
 
             question_template = (
