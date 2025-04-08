@@ -52,6 +52,10 @@ def run(rank, world_size, args):
         )
     if args.ori_processor_path is None:
         ori_processor_path = args.model_path
+    infer_dir = os.path.join(args.model_path,'infer')
+    if not os.path.exists(infer_dir):
+        os.makedirs(infer_dir)
+    output_file = os.path.join(infer_dir, f'prediction_results_{args.test_name}.jsonl')
     processor = AutoProcessor.from_pretrained(ori_processor_path) 
     model = model.to(torch.device(rank))
     model = model.eval()
@@ -150,6 +154,9 @@ def run(rank, world_size, args):
                     'response': response,
                     'pred_result': success
                 }
+                with open(output_file, 'a') as json_file:
+                    json.dump(new_pred_dict, json_file)
+                    json_file.write('\n')  
                 pred_results.append(new_pred_dict)
 
             except Exception as e:
@@ -182,16 +189,6 @@ def main(args):
 
         logger.info(f'Error number: {global_count_error}')  
         
-        infer_dir = os.path.join(args.model_path,'infer')
-        if not os.path.exists(infer_dir):
-            os.makedirs(infer_dir)
-        output_file = os.path.join(infer_dir, f'prediction_results_{args.test_name}.jsonl')
-        with open(output_file, 'w') as json_file:
-            for item in global_results:
-                json.dump(item, json_file)
-                json_file.write('\n') 
-
-        logger.info(f"Results saved to {output_file}")
         logger.info('Finished running')
     
     else:
