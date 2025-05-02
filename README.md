@@ -25,7 +25,7 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 | UI-R1-3B (v1)    | 93.4     | 77.1     | **94.3**  | 59.0      | 87.6     | 75.6     | 83.2 / 67     |
 | UI-R1-3B (v2)    | 96.2     | 84.3     | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 60     |
 
-#### Benchmark 1: ScreenSpot-Pro
+#### Benchmark 2: ScreenSpot-Pro
 
 | ScreenSpot-Pro   | Average Length↓ | Average Accuracy |
 | ---------------- | -------------- | ---------------- |
