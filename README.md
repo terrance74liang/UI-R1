@@ -54,9 +54,9 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 
 ##### Todo
 
-1. 7B may be opposite.
-2. Planning may be opposite. The author predicts that Fast Grounding, Slow Planning.
-3. The checkpoints of UI-R1-3B-DAST and UI-R1-3B-Nothink will be released soon. The updated paper will come soon.
+- [ ] Performance on 7B may be opposite.
+- [ ] Performance on Planning may be opposite. The author predicts that Fast Grounding, Slow Planning.
+- [ ] The checkpoints of UI-R1-3B-DAST and UI-R1-3B-Nothink will be released soon. The updated paper will come soon.
 
 ## Setup
 
