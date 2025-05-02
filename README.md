@@ -43,7 +43,7 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 | UGround-7B       | -              | 16.5             |
 | OS-ATLAS-7B      | -              | 18.9             |
 | UI-R1-3B (v1)    | 102            | 17.8             |
-| GUI-R1-3B        | 114            | 26.6 / 28.6      |
+| GUI-R1-3B        | 114            | 26.6            |
 | UI-R1-3B (v2)    | 129            | 22.6             |
 | UI-R1-3B-Nothink | **26**             | **32.6**         |
 | UI-R1-3B-DAST    | 31             | 31.6             |
