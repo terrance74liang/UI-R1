@@ -26,26 +26,26 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 
 ##### Benchmark 1: ScreenSpot
 
-| ScreenSpotV2     | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len     |
+| ScreenSpotV2     | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len↓     |
 | ---------------- | -------- | -------- | --------- | --------- | -------- | -------- | ------------- |
 | OS-ATLAS-7B      | 95.2     | 75.8     | 90.7      | 63.6      | 90.6     | 77.3     | 84.1 /        |
 | UI-TARS-7B       | 95.2     | 79.1     | 90.7      | 68.6      | 90.6     | 78.3     | 84.7 /        |
 | UI-R1-3B (v1)    | 93.4     | 77.1     | **94.3**  | 59.0      | 87.6     | 75.6     | 83.2 / 67     |
 | GUI-R1-3B        | 97.6     | 78.2     | **94.3**  | 64.3      | 91.0     | 72.4     | 85.0 / 80     |
 | UI-R1-3B (v2)    | 96.2     | 84.3     | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 60     |
-| UI-R1-3B-Nothink | **99.0** | 84.8     | 93.8      | 69.3      | 88.5     | 76.8     | 87.1 / 25     |
+| UI-R1-3B-Nothink | **99.0** | 84.8     | 93.8      | 69.3      | 88.5     | 76.8     | 87.1 / **25**     |
 | UI-R1-3B-DAST    | 98.6     | **86.7** | **94.3**  | **72.9**  | **92.3** | **78.8** | **88.8** / 30 |
 
 ##### Benchmark 1: ScreenSpot-Pro
 
-| ScreenSpot-Pro   | Average Length | Average Accuracy |
+| ScreenSpot-Pro   | Average Length↓ | Average Accuracy |
 | ---------------- | -------------- | ---------------- |
 | UGround-7B       | -              | 16.5             |
 | UI-R1-3B (v1)    | 102            | 17.8             |
 | OS-ATLAS-7B      | -              | 18.9             |
 | GUI-R1-3B        | 114            | 26.6 / 28.6      |
 | UI-R1-3B (v2)    | 129            | 22.6             |
-| UI-R1-3B-Nothink | 26             | **32.6**         |
+| UI-R1-3B-Nothink | **26**             | **32.6**         |
 | UI-R1-3B-DAST    | 31             | 31.6             |
 
 ##### Analysis
