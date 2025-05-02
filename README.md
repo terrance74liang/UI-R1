@@ -34,15 +34,6 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 | UI-R1-3B (v1)    | 102            | 17.8             |
 | UI-R1-3B (v2)    | 129            | **22.6**             |
 
-##### Analysis
-
-1. Our UI-R1-3B achieves **SOTA** in 3B Open-source methods, demonstrating GUI grounding needs no reasoning.
-
-##### Todo
-
-- [ ] Performance on 7B may be opposite.
-- [ ] Performance on Planning may be opposite. The author predicts that Fast Grounding, Slow Planning.
-- [ ] The checkpoints of UI-R1-3B-DAST and UI-R1-3B-Nothink will be released soon. The updated paper will come soon.
 
 ## Setup
 
