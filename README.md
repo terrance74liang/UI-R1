@@ -16,25 +16,6 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
   <img src="assets/radar.png" alt="Logo" >
 </a>
 
-#### Benchmark 1: ScreenSpot
-
-| ScreenSpotV2     | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len↓     |
-| ---------------- | -------- | -------- | --------- | --------- | -------- | -------- | ------------- |
-| OS-ATLAS-7B      | 95.2     | 75.8     | 90.7      | 63.6      | 90.6     | 77.3     | 84.1 /        |
-| UI-TARS-7B       | 95.2     | 79.1     | 90.7      | 68.6      | 90.6     | 78.3     | 84.7 /        |
-| UI-R1-3B (v1)    | 93.4     | 77.1     | **94.3**  | 59.0      | 87.6     | 75.6     | 83.2 / 67     |
-| UI-R1-3B (v2)    | 96.2     | 84.3     | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 60     |
-
-#### Benchmark 2: ScreenSpot-Pro
-
-| ScreenSpot-Pro   | Average Length↓ | Average Accuracy |
-| ---------------- | -------------- | ---------------- |
-| UGround-7B       | -              | 16.5             |
-| OS-ATLAS-7B      | -              | 18.9             |
-| UI-R1-3B (v1)    | 102            | 17.8             |
-| UI-R1-3B (v2)    | 129            | **22.6**             |
-
-
 ## Setup
 
 ```shell
