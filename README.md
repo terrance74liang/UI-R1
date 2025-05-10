@@ -59,7 +59,7 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 - [ ] Performance on Planning may be opposite. The author predicts that Fast Grounding, Slow Planning.
 - [ ] The checkpoints of UI-R1-3B-E will be released soon.
 - [ ] The updated paper will come soon.
-- [X] The efficient training code will come soon
+- [X] The efficient training code will come soon. (in src/script/train_e.sh)
 ## Setup
 
 ```shell
