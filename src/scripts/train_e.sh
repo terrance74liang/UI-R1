@@ -1,8 +1,8 @@
 export DEBUG_MODE="true"
 
-export DATA_PATH=../../data/GUI-R1-low
+export DATA_PATH=../../data/UI-R1-low
 export CKPT_PATH=../../ckpt/Qwen/Qwen2.5-VL-3B-Instruct
-export SAVE_PATH=../../ckpt/Qwen2.5-VL-GUI-R1-ground-dast-4ep
+export SAVE_PATH=../../ckpt/Qwen2.5-VL-UI-R1-ground-dast-4ep
 export LOG_PATH=${SAVE_PATH}"/debug_log.txt"
 export Train_PATH=${SAVE_PATH}"/train.log"
 mkdir -p $SAVE_PATH
@@ -14,8 +14,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
     ../ui_r1/src/open_r1/grpo_json_action_coord-dast.py \
     --output_dir ${SAVE_PATH}  \
     --model_name_or_path ${CKPT_PATH} \
-    --data_file_paths ../../data/GUI-R1-low/train_ground.json\
-    --image_folders ../../data/GUI-R1-low/train_imgs\
+    --data_file_paths ../../data/UI-R1-low/train_ground.json\
+    --image_folders ../../data/UI-R1-low/train_imgs\
     --dataset_name ${DATA_PATH} \
     --deepspeed ../ui_r1/local_scripts/zero3.json \
     --max_prompt_length 1024 \
@@ -37,9 +37,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
 
 export DEBUG_MODE="true"
 
-export DATA_PATH=../../data/GUI-R1-low
-export CKPT_PATH=../../ckpt/Qwen2.5-VL-GUI-R1-ground-dast-4ep
-export SAVE_PATH=../../ckpt/Qwen2.5-VL-GUI-R1-ground-dast-nothink-8ep
+export DATA_PATH=../../data/UI-R1-low
+export CKPT_PATH=../../ckpt/Qwen2.5-VL-UI-R1-ground-dast-4ep
+export SAVE_PATH=../../ckpt/Qwen2.5-VL-UI-R1-ground-dast-nothink-8ep
 export LOG_PATH=${SAVE_PATH}"/debug_log.txt"
 export Train_PATH=${SAVE_PATH}"/train.log"
 mkdir -p $SAVE_PATH
@@ -51,8 +51,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
     ../ui_r1/src/open_r1/grpo_json_action_coord-nothink.py \
     --output_dir ${SAVE_PATH}  \
     --model_name_or_path ${CKPT_PATH} \
-    --data_file_paths ../../data/GUI-R1-low/train_ground.json\
-    --image_folders ../../data/GUI-R1-low/train_imgs\
+    --data_file_paths ../../data/UI-R1-low/train_ground.json\
+    --image_folders ../../data/UI-R1-low/train_imgs\
     --dataset_name ${DATA_PATH} \
     --deepspeed ../ui_r1/local_scripts/zero3.json \
     --max_prompt_length 1024 \
