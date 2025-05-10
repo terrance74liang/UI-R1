@@ -16,6 +16,48 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
   <img src="assets/radar.png" alt="Logo" >
 </a>
 
+## 🔥Insight 1 : Fast Grounding
+
+**Thinking is not needed for GUI grounding.** Inspired by concurrent works studying efficient LRM, we realize efficient reasoning by RFT training. UI-R1-3B-E's training consists of two steps:
+
+1. DAST (Difficulty-Adaptive Slow-Thinking): Add difficulty-adaptive length reward to make reasoning from slow to fast.
+2. Nothinking: Not output reasoning process.
+
+Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R1-3B (v1).
+
+#### Benchmark 1: ScreenSpotV2
+
+| ScreenSpotV2     | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len↓     |
+| ---------------- | -------- | -------- | --------- | --------- | -------- | -------- | ------------- |
+| OS-ATLAS-7B      | 95.2     | 75.8     | 90.7      | 63.6      | 90.6     | 77.3     | 84.1 /        |
+| UI-TARS-7B       | 95.2     | 79.1     | 90.7      | 68.6      | 90.6     | **78.3** | 84.7 /        |
+| UI-R1-3B (v1) | 96.2     | **84.3** | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 67         |
+| GUI-R1-3B        | 97.6     | 78.2     | 94.3  | 64.3      | **91.0** | 72.4     | 85.0 / 80     |
+| UI-R1-3B (v2)    | 97.6     | 79.6     | 92.3      | 67.9      | 88.9     | 77.8     | 85.8 / 60         |
+| UI-R1-3B-E    | **99.0** | 83.4     | **97.0**  | **75.0**  | **91.0** | 74.9     | **88.1** / **28** |
+
+#### Benchmark 2: ScreenSpot-Pro
+
+| ScreenSpot-Pro   | Average Length↓ | Average Accuracy |
+| ---------------- | -------------- | ---------------- |
+| UGround-7B       | -              | 16.5             |
+| OS-ATLAS-7B      | -              | 18.9             |
+| UI-R1-3B (v1)    | 102            | 17.8             |
+| GUI-R1-3B        | 114            | 26.6            |
+| UI-R1-3B (v2)    | 129            | 29.8           |
+| UI-R1-3B-E | **28**            | **33.2**      |
+
+##### Analysis
+
+1. Our UI-R1-3B achieves **SOTA** with **least** answer tokens in 3B/7B Open-source methods, demonstrating GUI grounding needs no reasoning.
+
+##### Todo
+
+- [ ] Performance on 7B may be opposite.
+- [ ] Performance on Planning may be opposite. The author predicts that Fast Grounding, Slow Planning.
+- [ ] The checkpoints of UI-R1-3B-E will be released soon.
+- [ ] The updated paper will come soon.
+- [ ] The efficient training code will come soon
 ## Setup
 
 ```shell
