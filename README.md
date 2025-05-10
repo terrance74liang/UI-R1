@@ -18,7 +18,9 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 
 ## 🔥Insight 1 : Fast Grounding
 
-**Thinking is not needed for GUI grounding.** Inspired by concurrent works studying efficient LRM, we realize efficient reasoning by RFT training. UI-R1-3B-E's training consists of two steps:
+> **Thinking is not needed for GUI grounding.**
+
+Inspired by concurrent works studying efficient LRM, we realize efficient reasoning by RFT training. UI-R1-3B-E's training consists of two steps:
 
 1. DAST (Difficulty-Adaptive Slow-Thinking): Add difficulty-adaptive length reward to make reasoning from slow to fast.
 2. Nothinking: Not output reasoning process.
