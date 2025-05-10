@@ -51,7 +51,7 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 
 ##### Analysis
 
-1. Our UI-R1-3B achieves **SOTA** with **least** answer tokens in 3B/7B Open-source methods, demonstrating GUI grounding needs no reasoning.
+1. Our UI-R1-3B-E achieves **SOTA** with **least** answer tokens in 3B/7B Open-source methods, demonstrating GUI grounding needs no reasoning.
 
 ##### Todo
 
