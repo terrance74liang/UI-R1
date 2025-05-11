@@ -1,4 +1,4 @@
-# UI-R1: Enhancing Action Prediction of GUI Agents by Reinforcement Learning
+# UI-R1: Enhancing **Efficient** Action Prediction of GUI Agents by Reinforcement Learning
 
 <font size=4><div align='center' > [[📖 Paper](https://arxiv.org/abs/2503.21620)] [[🤗 Checkpoints](https://huggingface.co/LZXzju/Qwen2.5-VL-3B-UI-R1)] [[🤗 Datasets](https://huggingface.co/datasets/LZXzju/UI-R1-3B-Train)] [[🤗 Daily Paper](https://huggingface.co/papers/2503.21620)]</div></font>
 
