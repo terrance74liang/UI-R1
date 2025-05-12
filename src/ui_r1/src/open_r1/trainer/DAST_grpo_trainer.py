@@ -643,20 +643,22 @@ class Qwen2VLGRPOTrainer(Trainer):
                 add_special_tokens=False,
             )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
-
+        scales = []
         # resize output coordinate due to the image resize
-        origin_height = images[0].size[1]
-        origin_width = images[0].size[0]
+        for i in range(len(images)):
+            
+            origin_height = images[i].size[1]
+            origin_width = images[i].size[0]
 
-        # option 1
-        # resized_height, resized_width = smart_resize(origin_height, origin_width, max_pixels=self.processing_class.image_processor.max_pixels)
-        # option 2
-        resized_height = prompt_inputs['image_grid_thw'][0][1] * self.processing_class.image_processor.patch_size
-        resized_width = prompt_inputs['image_grid_thw'][0][2] * self.processing_class.image_processor.patch_size
-        
-        scale_x = origin_width / resized_width
-        scale_y = origin_height / resized_height
-        scales = [scale_x,scale_y]
+            # option 1
+            # resized_height, resized_width = smart_resize(origin_height, origin_width, max_pixels=self.processing_class.image_processor.max_pixels)
+            # option 2
+            resized_height = prompt_inputs['image_grid_thw'][i][1] * self.processing_class.image_processor.patch_size
+            resized_width = prompt_inputs['image_grid_thw'][i][2] * self.processing_class.image_processor.patch_size
+
+            scale_x = origin_width / resized_width
+            scale_y = origin_height / resized_height
+            scales.append([scale_x,scale_y])
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         if len(images) > 0:
             pixel_values = prompt_inputs["pixel_values"]
