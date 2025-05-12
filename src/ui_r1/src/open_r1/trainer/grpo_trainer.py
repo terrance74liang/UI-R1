@@ -64,38 +64,6 @@ if is_wandb_available():
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-import math
-def smart_resize(
-    height: int, width: int, factor: int = 28, min_pixels: int = 56 * 56, max_pixels: int = 14 * 14 * 4 * 1280
-):
-    """Rescales the image so that the following conditions are met:
-
-    1. Both dimensions (height and width) are divisible by 'factor'.
-
-    2. The total number of pixels is within the range ['min_pixels', 'max_pixels'].
-
-    3. The aspect ratio of the image is maintained as closely as possible.
-
-    """
-    if height < factor or width < factor:
-        raise ValueError(f"height:{height} or width:{width} must be larger than factor:{factor}")
-    elif max(height, width) / min(height, width) > 200:
-        raise ValueError(
-            f"absolute aspect ratio must be smaller than 200, got {max(height, width) / min(height, width)}"
-        )
-    h_bar = round(height / factor) * factor
-    w_bar = round(width / factor) * factor
-    if h_bar * w_bar > max_pixels:
-        beta = math.sqrt((height * width) / max_pixels)
-        h_bar = math.floor(height / beta / factor) * factor
-        w_bar = math.floor(width / beta / factor) * factor
-    elif h_bar * w_bar < min_pixels:
-        beta = math.sqrt(min_pixels / (height * width))
-        h_bar = math.ceil(height * beta / factor) * factor
-        w_bar = math.ceil(width * beta / factor) * factor
-    return h_bar, w_bar
-
-
 class RepeatRandomSampler(Sampler):
     """
     Sampler that repeats the indices of a dataset in a structured manner.
@@ -571,21 +539,28 @@ class Qwen2VLGRPOTrainer(Trainer):
                 padding_side="left",
                 add_special_tokens=False,
             )
+        #(2360, 1640)
+        # print(self.processing_class.image_processor.patch_size) #14
+        # print(prompt_inputs['pixel_values'].shape) #14400 * 1176
+        # print(prompt_inputs['image_grid_thw']) #100 144
+        # print(prompt_inputs['image_grid_thw'])
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
-
+        scales = []
         # resize output coordinate due to the image resize
-        origin_height = images[0].size[1]
-        origin_width = images[0].size[0]
+        for i in range(len(images)):
+            
+            origin_height = images[i].size[1]
+            origin_width = images[i].size[0]
 
-        # option 1
-        # resized_height, resized_width = smart_resize(origin_height, origin_width, max_pixels=self.processing_class.image_processor.max_pixels)
-        # option 2
-        resized_height = prompt_inputs['image_grid_thw'][0][1] * self.processing_class.image_processor.patch_size
-        resized_width = prompt_inputs['image_grid_thw'][0][2] * self.processing_class.image_processor.patch_size
-        
-        scale_x = origin_width / resized_width
-        scale_y = origin_height / resized_height
-        scales = [scale_x,scale_y]
+            # option 1
+            # resized_height, resized_width = smart_resize(origin_height, origin_width, max_pixels=self.processing_class.image_processor.max_pixels)
+            # option 2
+            resized_height = prompt_inputs['image_grid_thw'][i][1] * self.processing_class.image_processor.patch_size
+            resized_width = prompt_inputs['image_grid_thw'][i][2] * self.processing_class.image_processor.patch_size
+
+            scale_x = origin_width / resized_width
+            scale_y = origin_height / resized_height
+            scales.append([scale_x,scale_y])
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         if len(images) > 0:
             pixel_values = prompt_inputs["pixel_values"]
