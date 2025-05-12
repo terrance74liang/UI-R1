@@ -36,7 +36,7 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 | UI-R1-3B (v1) | 96.2     | **84.3** | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 67         |
 | GUI-R1-3B        | 97.6     | 78.2     | 94.3  | 64.3      | **91.0** | 72.4     | 85.0 / 80     |
 | UI-R1-3B (v2)    | 97.6     | 79.6     | 92.3      | 67.9      | 88.9     | 77.8     | 85.8 / 60         |
-| UI-R1-3B-E    | **99.0** | 83.4     | **97.0**  | **75.0**  | **91.0** | 74.9     | **88.1** / **28** |
+| UI-R1-E-3B    | **99.0** | 83.4     | **97.0**  | **75.0**  | **91.0** | 74.9     | **88.1** / **28** |
 
 #### Benchmark 2: ScreenSpot-Pro
 
@@ -47,7 +47,7 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 | UI-R1-3B (v1)    | 102            | 17.8             |
 | GUI-R1-3B        | 114            | 26.6            |
 | UI-R1-3B (v2)    | 129            | 29.8           |
-| UI-R1-3B-E | **28**            | **33.2**      |
+| UI-R1-E-3B | **28**            | **33.2**      |
 
 ##### Analysis
 
@@ -129,6 +129,9 @@ bash train.sh
 
 
 ## 🗞️ News
+- **`2025-05-12`**: We release the [checkpoints](https://huggingface.co/LZXzju/Qwen2.5-VL-3B-UI-R1-E) of the UI-R1-E-3B model.
+- **`2025-05-12`**: We fix the bug of scales when batch_size > 1.
+- **`2025-05-11`**: We release the efficient training code of the UI-R1-E-3B model.
 - **`2025-04-02`**: We release the [datasets](https://huggingface.co/datasets/LZXzju/UI-R1-3B-Train) of the UI-R1-3B model.
 - **`2025-03-30`**: We release the [checkpoints](https://huggingface.co/LZXzju/Qwen2.5-VL-3B-UI-R1) of the UI-R1-3B model.
 - **`2025-03-30`**: We release the UI-R1 repository.
