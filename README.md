@@ -29,25 +29,25 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 
 #### Benchmark 1: ScreenSpotV2
 
-| ScreenSpotV2     | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len↓     |
-| ---------------- | -------- | -------- | --------- | --------- | -------- | -------- | ------------- |
-| OS-ATLAS-7B      | 95.2     | 75.8     | 90.7      | 63.6      | 90.6     | 77.3     | 84.1 /        |
-| UI-TARS-7B       | 95.2     | 79.1     | 90.7      | 68.6      | 90.6     | 78.3 | 84.7 /        |
-| UI-R1-3B (v1) | 96.2     | **84.3** | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 67         |
-| GUI-R1-3B        | 97.6     | 78.2     | 94.3  | 64.3      | 91.0 | 72.4     | 85.0 / 80     |
-| UI-R1-3B (v2)    | 97.6     | 79.6     | 92.3      | 67.9      | 88.9     | 77.8     | 85.8 / 60         |
-| UI-R1-E-3B    | **98.2** | 83.9     | **94.8**  | **75.0**  | **93.2** | **83.7**     | **89.5** / **28** |
+| ScreenSpotV2  | mode         | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len↓        |
+| ------------- | ------------ | -------- | -------- | --------- | --------- | -------- | -------- | ----------------- |
+| OS-ATLAS-7B   | w/o thinking | 95.2     | 75.8     | 90.7      | 63.6      | 90.6     | 77.3     | 84.1 /            |
+| UI-TARS-7B    | w/o thinking | 95.2     | 79.1     | 90.7      | 68.6      | 90.6     | 78.3     | 84.7 /            |
+| UI-R1-3B (v1) | w/ thinking  | 96.2     | **84.3** | 92.3      | 63.6      | 89.2     | 75.4     | 85.4 / 67         |
+| GUI-R1-3B     | w/ thinking  | 97.6     | 78.2     | 94.3      | 64.3      | 91.0     | 72.4     | 85.0 / 80         |
+| UI-R1-3B (v2) | w/ thinking  | 97.6     | 79.6     | 92.3      | 67.9      | 88.9     | 77.8     | 85.8 / 60         |
+| UI-R1-E-3B    | w/o thinking | **98.2** | 83.9     | **94.8**  | **75.0**  | **93.2** | **83.7** | **89.5** / **28** |
 
 #### Benchmark 2: ScreenSpot-Pro
 
-| ScreenSpot-Pro   | Average Length↓ | Average Accuracy |
-| ---------------- | -------------- | ---------------- |
-| UGround-7B       | -              | 16.5             |
-| OS-ATLAS-7B      | -              | 18.9             |
-| UI-R1-3B (v1)    | 102            | 17.8             |
-| GUI-R1-3B        | 114            | 26.6            |
-| UI-R1-3B (v2)    | 129            | 29.8           |
-| UI-R1-E-3B | **28**            | **33.5**      |
+| ScreenSpot-Pro | mode         | Average Length↓ | Average Accuracy |
+| -------------- | ------------ | --------------- | ---------------- |
+| UGround-7B     | w/o thinking | -               | 16.5             |
+| OS-ATLAS-7B    | w/o thinking | -               | 18.9             |
+| UI-R1-3B (v1)  | w/ thinking  | 102             | 17.8             |
+| GUI-R1-3B      | w/ thinking  | 114             | 26.6             |
+| UI-R1-3B (v2)  | w/ thinking  | 129             | 29.8             |
+| UI-R1-E-3B     | w/o thinking | **28**          | **33.5**         |
 
 ##### Analysis
 
