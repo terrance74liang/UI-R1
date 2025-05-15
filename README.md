@@ -57,8 +57,8 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 
 - [ ] Performance on 7B may be opposite.
 - [ ] Performance on Planning may be opposite. The author predicts that Fast Grounding, Slow Planning.
-- [ ] The checkpoints of UI-R1-3B-E will be released soon.
-- [ ] The updated paper will come soon.
+- [X] The checkpoints of UI-R1-3B-E will be released soon.
+- [X] The updated paper will come soon.
 - [X] The efficient training code will come soon. (in src/script/train_e.sh)
 ## Setup
 
@@ -131,6 +131,7 @@ bash train_e.sh
 
 
 ## 🗞️ News
+- **`2025-05-14`**: We update the [paper](https://arxiv.org/abs/2503.21620) with UI-R1-E-3B.
 - **`2025-05-12`**: We release the [checkpoints](https://huggingface.co/LZXzju/Qwen2.5-VL-3B-UI-R1-E) of the UI-R1-E-3B model.
 - **`2025-05-12`**: We fix the bug of scales when batch_size > 1.
 - **`2025-05-11`**: We release the efficient training code of the UI-R1-E-3B model.
