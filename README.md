@@ -29,7 +29,7 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 
 #### Benchmark 1: ScreenSpotV2
 
-| ScreenSpotV2  | inference mode | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg / Len↓        |
+| ScreenSpotV2  | inference mode | Mobile-T | Mobile-I | Desktop-T | Desktop-I | Web-T    | Web-I    | Avg↑ / Len↓        |
 | ------------- | -------------- | -------- | -------- | --------- | --------- | -------- | -------- | ----------------- |
 | OS-ATLAS-7B   | w/o thinking   | 95.2     | 75.8     | 90.7      | 63.6      | 90.6     | 77.3     | 84.1 /            |
 | UI-TARS-7B    | w/o thinking   | 95.2     | 79.1     | 90.7      | 68.6      | 90.6     | 78.3     | 84.7 /            |
@@ -40,7 +40,7 @@ Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R
 
 #### Benchmark 2: ScreenSpot-Pro
 
-| ScreenSpot-Pro | inference mode | Average Length↓ | Average Accuracy |
+| ScreenSpot-Pro | inference mode | Average Length↓ | Average Accuracy↑ |
 | -------------- | -------------- | --------------- | ---------------- |
 | UGround-7B     | w/o thinking   | -               | 16.5             |
 | OS-ATLAS-7B    | w/o thinking   | -               | 18.9             |
