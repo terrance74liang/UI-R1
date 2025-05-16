@@ -33,7 +33,7 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
 | OmniParser-V2  |     72     |       54.8       |      39.6      | 55.5 |
 | Uground-V1-2B  |    78.8    |       57.4       |      26.6      | 54.3 |
 |  OS-Atlas-7B   |    82.5    |       58.6       |      18.9      | 53.3 |
-|     **UI-R1-3B**      |    78.6    |       58.5       |      17.8      | 51.6 |
+|     **UI-R1-3B**      |    83.3    |       58.5       |      17.8      | 53.2 |
 |   UGround-7B   |    74.1    |       54.2       |      16.5      | 48.3 |
 | UI-I2E-VLM-4B  |    70.4    |       53.4       |      12.2      | 45.3 |
 |   OmniParser   |    73.9    |       53.1       |      8.3       | 45.1 |
