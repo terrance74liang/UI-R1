@@ -16,6 +16,35 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
   <img src="assets/radar.png" alt="Logo" >
 </a>
 
+## Grounding Leaderboard: UI-I2E-Bench
+|     Model      | ScreenSpot | UI-I2E-Bench Avg | ScreenSpot-Pro | Average  |
+| :------------: | :--------: | :--------------: | :------------: | :--: |
+| UI-TARS-1.5-7B |    88.1    |       73.2       |      42.2      | 67.8 |
+| Uground-V1-72B |    89.7    |       76.3       |      34.3      | 66.8 |
+|  UI-TARS-72B   |    88.4    |       73.7       |      38.1      | 66.7 |
+|   **UI-R1-E-3B**   |    89.2    |       69.1       |      33.5      | 63.9 |
+| Uground-V1-7B  |    87.1    |       70.3       |      31.1      | 62.8 |
+|   InfiGUI-R1   |    87.5    |       69.7       |      29.6      | 62.3 |
+|   UI-TARS-7B   |    89.5    |       61.4       |      35.7      | 62.2 |
+| Qwen2.5-VL-72B |    87.1    |       51.4       |      43.6      | 60.7 |
+| UI-I2E-VLM-7B  |    82.5    |       69.5       |      23.6      | 58.5 |
+|   UI-TARS-2B   |    82.3    |        62        |      27.7      | 57.3 |
+| Qwen2.5-VL-7B  |    84.7    |       53.8       |       29       | 55.8 |
+| OmniParser-V2  |     72     |       54.8       |      39.6      | 55.5 |
+| Uground-V1-2B  |    78.8    |       57.4       |      26.6      | 54.3 |
+|  OS-Atlas-7B   |    82.5    |       58.6       |      18.9      | 53.3 |
+|     **UI-R1-3B**      |    78.6    |       58.5       |      17.8      | 51.6 |
+|   UGround-7B   |    74.1    |       54.2       |      16.5      | 48.3 |
+| UI-I2E-VLM-4B  |    70.4    |       53.4       |      12.2      | 45.3 |
+|   OmniParser   |    73.9    |       53.1       |      8.3       | 45.1 |
+|   ShowUI-2B    |    76.8    |       41.5       |      7.7       |  42  |
+| Qwen2.5-VL-3B  |    55.5    |       41.7       |      23.9      | 41.3 |
+|   Aguvis-7B    |    84.4    |       53.2       |      22.9      | 40.4 |
+|  OS-Atlas-4B   |    70.1    |       44.3       |      3.7       | 39.4 |
+|  Qwen2-VL-7B   |    42.6    |       48.7       |      1.6       |  31  |
+|    Seeclick    |    55.8    |       26.4       |      1.1       | 27.8 |
+|  InternVL2-4B  |    4.2     |       0.9        |      0.3       | 1.8  |
+
 ## 🔥Insight 1 : Fast Grounding
 
 > **Thinking is not needed for GUI grounding.**
