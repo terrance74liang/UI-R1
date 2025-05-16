@@ -16,7 +16,7 @@ Experimental results demonstrate that our proposed **UI-R1-3B** achieves signifi
   <img src="assets/radar.png" alt="Logo" >
 </a>
 
-## Grounding Leaderboard: UI-I2E-Bench
+## Grounding Leaderboard: [[UI-I2E-Bench](https://colmon46.github.io/i2e-bench-leaderboard/)]
 |     Model      | ScreenSpot | UI-I2E-Bench Avg | ScreenSpot-Pro | Average  |
 | :------------: | :--------: | :--------------: | :------------: | :--: |
 | UI-TARS-1.5-7B |    88.1    |       73.2       |      42.2      | 67.8 |
