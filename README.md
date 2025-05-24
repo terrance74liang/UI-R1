@@ -54,7 +54,7 @@ Inspired by concurrent works studying efficient LRM, we realize efficient reason
 1. DAST (Difficulty-Adaptive Slow-Thinking): Add difficulty-adaptive length reward to make reasoning from slow to fast.
 2. Nothinking: Not output reasoning process.
 
-Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset compared to UI-R1-3B (v1).
+Note: UI-R1-3B (v2) and UI-R1-3B-E both train on larger dataset (2K grounding data in [GUI-R1-3K](https://huggingface.co/datasets/ritzzai/GUI-R1)) compared to UI-R1-3B (v1).
 
 #### Benchmark 1: ScreenSpotV2
 
