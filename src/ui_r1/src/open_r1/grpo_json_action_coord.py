@@ -146,15 +146,18 @@ def accuracy_reward_coord(completions, solution,scales, **kwargs):
     current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
 
     show_flage = False
-    for content, sol in zip(contents, solution):
+    for content, sol, scale in zip(contents, solution,scales):
         reward = 0.0
+        # Try symbolic verification first
+        # print("content: ", content)
+        # print("sol: ", sol)
         try:
             student_answer_action = extract_action(content)
             ground_truth_action = extract_action(sol)
             if student_answer_action and ground_truth_action and student_answer_action == ground_truth_action:
                 if student_answer_action == "click":
                     student_answer_coord, flag1 = extract_coord(content)
-                    student_answer_coord = [int(student_answer_coord[0] * scales[0]), int(student_answer_coord[1] * scales[1])]
+                    student_answer_coord = [int(student_answer_coord[0] * scale[0]), int(student_answer_coord[1] * scale[1])]
                     ground_truth_bbox, flag2 = extract_bbox(sol)
                     show_flage = flag1 and flag2
                     if ground_truth_bbox[0] <= student_answer_coord[0] <= ground_truth_bbox[2] and ground_truth_bbox[1] <= student_answer_coord[1] <= ground_truth_bbox[3]:
