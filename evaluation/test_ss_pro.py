@@ -64,7 +64,7 @@ def run(rank, world_size, args):
     correct_count = 0
     pred_results = []
     image_dir = os.path.join(args.ss_path,"images")
-    json_dir = os.path.join(args.ss_path,"annotations")
+    json_dir = os.path.join(args.ss_path,"annotations_grouped")
     if args.task_name == "all":
         json_files = [f for f in os.listdir(json_dir) if f.endswith('.json')]
     else:
@@ -168,6 +168,7 @@ def run(rank, world_size, args):
 def main(args):
     multiprocess = torch.cuda.device_count() >= 2
     mp.set_start_method('spawn')
+    print(torch.cuda.device_count())
     
     if multiprocess:
         logger.info('Started generation')

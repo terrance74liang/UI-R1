@@ -85,8 +85,8 @@ def run(rank, world_size, args):
     print(f"Process {rank} handling {len(data)} samples", flush=True)
 
     for j, item in tqdm(enumerate(data), total=len(data)):
-        image_path = os.path.join(args.image_path, item["img_filename"])  # 通过 args 传递路径
-        task_prompt = item["instruction"]
+        image_path = os.path.join(args.image_path, item["image"])  # 通过 args 传递路径
+        task_prompt = item["task"]
  
         question_template = (
             f"In this UI screenshot, I want to perform the command '{task_prompt}'.\n"
@@ -131,7 +131,7 @@ def run(rank, world_size, args):
             )
             response = response[0]
             
-            gt_action = item["action"]
+            gt_action = item['gt']["action_type"]
             pred_action = extract_action(response)
             action_success = gt_action == pred_action
             
@@ -141,7 +141,7 @@ def run(rank, world_size, args):
                 error_count += 1
             
             new_pred_dict = {
-                'image_id': item["img_filename"],
+                'image_id': item["image"],
                 'gt_action': gt_action,
                 'pred_action': pred_action,
                 'response': response,

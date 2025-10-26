@@ -1,5 +1,5 @@
-jsonl_file = ".../infer/prediction_results_ScreenSpot-pro-all.jsonl"
-ref_dir = ".../datasets/ScreenSpot-Pro/annotations"
+jsonl_file = "/home/teliang/scratch/UI-R1/ckpt/DAST_NOTHINK_seq_Qwen2.5/infer/grouped_ss_pro.jsonl"
+ref_dir = "/home/teliang/scratch/screenspot_pro/annotations"
 import os
 import json
 def process_ref_dir(ref_dir):
@@ -82,6 +82,7 @@ with open(jsonl_file, 'r') as f:
         if "true" in line:
             result[ref_dict[str(bbox)]] += 1
             result_application[application_dict[str(bbox)]] += 1
+
 for k in result.keys():
     print(k, result[k] / total[k])
 for k in result_application.keys():

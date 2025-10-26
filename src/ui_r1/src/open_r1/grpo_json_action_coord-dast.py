@@ -11,17 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import os
 import re
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 import PIL
-
+import numpy as np
 from datasets import load_dataset, load_from_disk
 from transformers import Qwen2VLForConditionalGeneration
-
+import math
 # from math_verify import parse, verify
 # from open_r1.trainer import Qwen2VLGRPOTrainer
 import sys
@@ -30,7 +29,7 @@ from open_r1.trainer import DASTQwen2VLGRPOTrainer, Qwen2VLGRPOVLLMTrainer
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 
 import json
-
+    
 # GRPO训练参数
 @dataclass
 class GRPOScriptArguments(ScriptArguments):
@@ -86,7 +85,7 @@ def extract_coord(content):
         if coord_match:
             coord = [int(coord_match.group(1)), int(coord_match.group(2))]
             x, y = coord
-            return coord, False
+            return coord, True
     return [0, 0, 0, 0], False
 
 def extract_bbox(response):
@@ -216,6 +215,150 @@ def format_reward(completions, **kwargs):
     # matches = [re.match(pattern, content) for content in completion_contents]
     matches = [re.fullmatch(pattern, content, re.DOTALL) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
+
+def gaussian_plane_reward(completions, solution, **kwargs):
+    def g_plane_reward(pred_bbox, gt_bbox):
+        alpha = 0.5
+        eps   = 1e-8
+        pred_x1, pred_y1, pred_x2, pred_y2 = pred_bbox
+        gt_x1, gt_y1, gt_x2, gt_y2 = gt_bbox
+        
+        pred_center_x = (pred_x1 + pred_x2) / 2
+        pred_center_y = (pred_y1 + pred_y2) / 2
+        pred_width = pred_x2 - pred_x1
+        pred_height = pred_y2 - pred_y1
+        # pred_μ
+        pred_mu = np.array([pred_center_x, pred_center_y])
+
+        gt_center_x = (gt_x1 + gt_x2) / 2
+        gt_center_y = (gt_y1 + gt_y2) / 2
+        # gt_μ
+        gt_mu = np.array([gt_center_x, gt_center_y])
+        gt_width = gt_x2 - gt_x1
+        gt_height = gt_y2 - gt_y1
+
+        # 1 sigma
+        pred_sigma_x = pred_width * alpha
+        pred_sigma_y = pred_height * alpha
+        gt_sigma_x   = gt_width * alpha
+        gt_sigma_y = gt_height * alpha
+
+        pred_cov = np.array([[pred_sigma_x**2, 0], 
+                            [0, pred_sigma_y**2]])
+        
+        # Σ2 (ground truth distribution covariance matrix)  
+        gt_cov = np.array([[gt_sigma_x**2, 0], 
+                        [0, gt_sigma_y**2]])
+        
+        sigma_avg = (pred_cov + gt_cov) / 2
+        # 
+        mu_diff = pred_mu - gt_mu
+        
+        # (1/8) * (μ1 - μ2)^T * Σ^(-1) * (μ1 - μ2)
+        sigma_avg_inv = np.linalg.inv(sigma_avg + eps * np.eye(2))
+        term1 = (1/8) * np.dot(mu_diff.T, np.dot(sigma_avg_inv, mu_diff))
+        
+        # (1/2) * ln(det(Σ) / sqrt(det(Σ1) * det(Σ2)))
+        det_sigma_avg = np.linalg.det(sigma_avg)
+        det_pred_cov = np.linalg.det(pred_cov)
+        det_gt_cov = np.linalg.det(gt_cov)
+        try:
+            term2 = 0.5 * np.log(det_sigma_avg / (np.sqrt(det_pred_cov * det_gt_cov + eps)))
+        except:
+            return 0.0
+        bhattacharyya_distance = term1 + term2
+
+        # 转换为奖励
+        plane_reward = np.exp(-bhattacharyya_distance)
+        plane_reward = round(plane_reward,3)
+        return plane_reward
+
+    contents = [completion[0]["content"] for completion in completions]
+    rewards = []
+    bbox_pattern = r'\[(\s*-?\d*\.?\d+\s*),\s*(\s*-?\d*\.?\d+\s*),\s*(\s*-?\d*\.?\d+\s*),\s*(\s*-?\d*\.?\d+\s*)\]'
+    for content, sol in zip(contents, solution):
+        reward = 0.0
+        # content = content.split('assistant\n')[-1]
+        # bbox_match = re.search(bbox_pattern, content.strip(), re.DOTALL)
+        try:
+            student_answer_action = extract_action(content)
+            ground_truth_action = extract_action(sol)
+            if student_answer_action and ground_truth_action and student_answer_action == ground_truth_action:
+                if student_answer_action == "click":
+                    click_match_coord, click_match_bool = extract_coord(content)
+                    if click_match_bool:
+                        # bbox = [float(bbox_match.group(1)), float(bbox_match.group(2)), float(bbox_match.group(3)), float(bbox_match.group(4))]
+                        click_point = [point for point in click_match_coord]
+                        # sol = [float(num) for num in sol]
+                        reward = g_plane_reward(click_point, extract_bbox(sol))
+        except Exception:
+            print(Exception, content, sol)
+            pass  
+        
+        rewards.append(reward)
+        if os.getenv("DEBUG_MODE") == "true":
+            log_path = os.getenv("LOG_PATH")
+            with open(log_path, "a") as f:
+                f.write(f"\n---------------------------------------------------- RANK: {0}, Coverage reward: {reward} ----------------------------------------------------\n")
+                f.write(f"Image Path: \n{kwargs.get('image_path', ['N/A'])[0]}\n")
+                f.write(f"\nInstruction: \n{kwargs.get('problem', ['N/A'])[0]}\n")
+                f.write(f"\nTrue prompt: \n{kwargs.get('prompt', ['N/A'])[0]}\n")
+                f.write(f"Content: \n{content}\n")
+                f.write(f"\nSolution: \n{sol}\n")
+    return rewards
+
+
+def gaussian_point_reward(completions, solution, **kwargs):
+    def g_point_reward(pred_bbox, gt_bbox):
+        alpha = 0.5
+        pred_x1, pred_y1, pred_x2, pred_y2 = pred_bbox
+        gt_x1, gt_y1, gt_x2, gt_y2 = gt_bbox
+        
+        # 计算中心点
+        pred_center_x = (pred_x1 + pred_x2) / 2
+        pred_center_y = (pred_y1 + pred_y2) / 2
+        gt_center_x = (gt_x1 + gt_x2) / 2
+        gt_center_y = (gt_y1 + gt_y2) / 2
+        gt_width = gt_x2 - gt_x1
+        gt_height = gt_y2 - gt_y1
+        
+        sigma_x = alpha * gt_width
+        sigma_y = alpha * gt_height
+
+        x_term = (pred_center_x - gt_center_x)**2 / (sigma_x**2)
+        y_term = (pred_center_y - gt_center_y)**2 / (sigma_y**2)
+        exponent = -0.5 * (x_term + y_term)
+        point_reward = math.exp(exponent)
+        point_reward = round(point_reward,3)
+        return point_reward
+
+    contents = [completion[0]["content"] for completion in completions]
+    rewards = []
+    bbox_pattern = r'\[(\s*-?\d*\.?\d+\s*),\s*(\s*-?\d*\.?\d+\s*),\s*(\s*-?\d*\.?\d+\s*),\s*(\s*-?\d*\.?\d+\s*)\]'
+    for content, sol in zip(contents, solution):
+        reward = 0.0
+        content = content.split('assistant\n')[-1]
+        bbox_match = re.search(bbox_pattern, content.strip(), re.DOTALL)
+        try:
+            if bbox_match:
+                bbox = [float(bbox_match.group(1)), float(bbox_match.group(2)), float(bbox_match.group(3)), float(bbox_match.group(4))]
+                sol = [float(num) for num in sol]
+                reward = g_point_reward(bbox, sol)
+        except Exception:
+            print(Exception, content, sol)
+            pass  
+        
+        rewards.append(reward)
+        if os.getenv("DEBUG_MODE") == "true":
+            log_path = os.getenv("LOG_PATH")
+            with open(log_path, "a") as f:
+                f.write(f"\n---------------------------------------------------- RANK: {0}, point reward: {reward} ----------------------------------------------------\n")
+                f.write(f"Image Path: \n{kwargs.get('image_path', ['N/A'])[0]}\n")
+                f.write(f"\nInstruction: \n{kwargs.get('problem', ['N/A'])[0]}\n")
+                f.write(f"\nTrue prompt: \n{kwargs.get('prompt', ['N/A'])[0]}\n")
+                f.write(f"Content: \n{content}\n")
+                f.write(f"\nSolution: \n{sol}\n")
+    return rewards
 
 # 三个reward的定义
 # action_type对应的reward
@@ -359,7 +502,7 @@ def main(script_args, training_args, model_args):
         dast_a=script_args.dast_a,
         dast_b=script_args.dast_b,
         max_pixels=script_args.max_pixels,
-        min_pixels=script_args.min_pixels,
+        min_pixels=script_args.min_pixels
     )
 
     # Train and push the model to the Hub

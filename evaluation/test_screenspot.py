@@ -133,7 +133,9 @@ def run(rank, world_size, args):
             pred_coord, _ = extract_coord(response)
             # pred_coord[0] = int(pred_coord[0] * scale_x)
             # pred_coord[1] = int(pred_coord[1] * scale_y)
-            success = gt_bbox[0] <= pred_coord[0] <= gt_bbox[2] and gt_bbox[1] <= pred_coord[1] <= gt_bbox[3]
+            # success = gt_bbox[0] <= pred_coord[0] <= gt_bbox[2] and gt_bbox[1] <= pred_coord[1] <= gt_bbox[3]
+            # in screenspot we have [left,top,width,height] and in uir1 we have [x1 left, y1 bottom, x2 right, y2 top]
+            success = gt_bbox[0] <= pred_coord[0] <= gt_bbox[0] + gt_bbox[2] and gt_bbox[1] <= pred_coord[1] <= gt_bbox[1] + gt_bbox[3]
             if success:
                 correct_count += 1
             else:
@@ -141,7 +143,7 @@ def run(rank, world_size, args):
             
             new_pred_dict = {
                 'image_id': item["img_filename"],
-                'gt_bbox': gt_bbox,
+                'gt_bbox': [gt_bbox[0],gt_bbox[1] + gt_bbox[3],gt_bbox[0] + gt_bbox[2], gt_bbox[1]],
                 'pred_coord': pred_coord,
                 'response': response,
                 'pred_result': success
@@ -160,6 +162,7 @@ def run(rank, world_size, args):
 def main(args):
     multiprocess = torch.cuda.device_count() >= 2
     mp.set_start_method('spawn')
+    # print(torch.cuda.device_count())
     
     if multiprocess:
         logger.info('Started generation')

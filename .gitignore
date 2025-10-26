@@ -1,1 +1,10 @@
 /data
+*.json
+*.jsonl
+*.bin
+*.txt
+*.safetensors
+*.log
+.gitattributes
+/ckpt
+*Instruct
