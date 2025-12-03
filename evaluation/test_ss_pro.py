@@ -11,13 +11,12 @@ import multiprocessing as mp
 import logging
 from multiprocessing import Pool
 import functools
-
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 rank = 0
+
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
     answer_tag_pattern = r'<answer>(.*?)</answer>'
@@ -29,7 +28,7 @@ def extract_coord(content):
         if coord_match:
             coord = [int(coord_match.group(1)), int(coord_match.group(2))]
             x, y = coord
-            return coord, False
+            return coord, True
     return [0, 0, 0, 0], False
 
 
@@ -54,8 +53,22 @@ def run(rank, world_size, args):
         ori_processor_path = args.model_path
     infer_dir = os.path.join(args.model_path,'infer')
     if not os.path.exists(infer_dir):
-        os.makedirs(infer_dir)
+        try:
+            os.makedirs(infer_dir)
+        except FileExistsError:
+            pass
     output_file = os.path.join(infer_dir, f'prediction_results_{args.test_name}.jsonl')
+
+    processed_image_paths = []
+    if os.path.exists(output_file):
+        with open(output_file,'r') as f:
+            for line in f:
+                line = line.strip()
+                pattern = r'"image_id"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
+                match = re.search(pattern, line)
+                if match:
+                    processed_image_paths.append(match.group(1))
+
     processor = AutoProcessor.from_pretrained(ori_processor_path) 
     model = model.to(torch.device(rank))
     model = model.eval()
@@ -64,7 +77,7 @@ def run(rank, world_size, args):
     correct_count = 0
     pred_results = []
     image_dir = os.path.join(args.ss_path,"images")
-    json_dir = os.path.join(args.ss_path,"annotations_grouped")
+    json_dir = os.path.join(args.ss_path,"annotations")
     if args.task_name == "all":
         json_files = [f for f in os.listdir(json_dir) if f.endswith('.json')]
     else:
@@ -77,6 +90,8 @@ def run(rank, world_size, args):
         print(f"Process {rank} handling {len(data)} samples", flush=True)
 
         for j, item in tqdm(enumerate(data), total=len(data)):
+            if item["img_filename"] in processed_image_paths:
+                continue
             image_path = os.path.join(image_dir, item["img_filename"])
             task_prompt = item["instruction"]
 

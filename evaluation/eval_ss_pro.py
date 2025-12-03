@@ -1,7 +1,8 @@
-jsonl_file = "/home/teliang/scratch/UI-R1/ckpt/DAST_NOTHINK_seq_Qwen2.5/infer/grouped_ss_pro.jsonl"
+jsonl_file = '/home/teliang/scratch/UI-R1/ckpt/DAST_Full_Gaussian_Qwen2.5-VL/infer/prediction_results_ScreenSpot-pro-all.jsonl'
 ref_dir = "/home/teliang/scratch/screenspot_pro/annotations"
 import os
 import json
+from functools import reduce
 def process_ref_dir(ref_dir):
     result_dict = {}
     application_dict = {}
@@ -85,5 +86,7 @@ with open(jsonl_file, 'r') as f:
 
 for k in result.keys():
     print(k, result[k] / total[k])
-for k in result_application.keys():
-    print(k, result_application[k] / total_application[k])    
+
+print("total: " + str(reduce(lambda x,y: x + y,result.values())/reduce(lambda x,y: x + y,total.values())) )
+# for k in result_application.keys():
+#     print(k, result_application[k] / total_application[k])    

@@ -17,7 +17,7 @@ import textwrap
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union, Sized
 import sys
-
+import re
 import torch
 import torch.utils.data
 import transformers
@@ -46,14 +46,14 @@ from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_c
 from trl.models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url
-
+from ..qwen25_attention import Qwen2_5_VLForConditionalGenerationWithAttention
 from accelerate.utils import is_peft_model, set_seed
 import PIL.Image
-
+import numpy as np
 import copy
 from torch.utils.data import Sampler
 import warnings
-
+from .. import qwen25_attention
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
@@ -61,14 +61,19 @@ if is_wandb_available():
     import wandb
 
 import comet_ml
-from dotenv import load_dotenv
 import psutil
-import inspect
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+def log_memory():
+    gb = 1024 ** 3
+    dev = torch.cuda.current_device()
+    mem = torch.cuda.memory_allocated(f"cuda:{dev}")/gb
+    vm = psutil.virtual_memory()
+    used_gb   = vm.used / 1e9  
+    return {'vram':mem,'ram':used_gb}
 
 import math
 def smart_resize(
@@ -255,30 +260,66 @@ class Qwen2VLGRPOTrainer(Trainer):
         min_pixels: Optional[int] = 3136,
         attn_implementation: str = "flash_attention_2",
         torch_dtype: str = "bfloat16",
+        experiment: comet_ml.start = None,
+        extract_coord_func : str = None,
+        attention_model : torch.nn = None
     ):
-        self.current_step_mem = 0
-        self.current_loss_step = 0
-        self.current_generate_and_score_step = 0
+        def smart_tokenizer_and_embedding_resize(
+            tokenizer: transformers.PreTrainedTokenizer,
+            model: transformers.PreTrainedModel,
+            ref_model : transformers.PreTrainedModel
+        ):
+            """Resize tokenizer and embedding.
 
-        load_dotenv()
-        os.getenv('COMET_API_KEY')
+            Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
+            """
+            num_new_tokens = tokenizer.add_special_tokens( {'additional_special_tokens':["<coord>","</coord>"]})
+            model.resize_token_embeddings(len(tokenizer))
+            ref_model.resize_token_embeddings(len(tokenizer))
 
-        stack = inspect.stack()
-        caller_frame = stack[-1]
-        parent_script_path = caller_frame.filename
 
-        if 'grpo_json_action_coord-dast' in parent_script_path:
-            env_key = os.getenv('DAST_EXP_NAME')
-        elif 'grpo_json_action_coord-nothink' in parent_script_path:
-            env_key = os.getenv('NOTHINK_EXP_NAME')
-        else:
-            print('NO LOGGING')
-            sys.exit()
-            
-        self.experiment_config = comet_ml.ExperimentConfig(name=env_key)
-        self.experiment = comet_ml.start(project_name="ui-r1", experiment_config=self.experiment_config)
+            new_vocab_size = len(tokenizer)    
+            # Update base model and current model config
+            if hasattr(model.config, "text_config"):
+                model.config.text_config.vocab_size = new_vocab_size
+            else:
+                model.config.vocab_size = new_vocab_size
+            model.vocab_size = new_vocab_size
 
-        self.log_memory()
+            if hasattr(ref_model.config, "text_config"):
+                ref_model.config.text_config.vocab_size = new_vocab_size
+            else:
+                ref_model.config.vocab_size = new_vocab_size
+            ref_model.vocab_size = new_vocab_size
+
+            for mod in [model, ref_model]:
+                if num_new_tokens > 0:
+                    input_embeddings = mod.get_input_embeddings().weight.data
+                    output_embeddings = mod.get_output_embeddings().weight.data
+
+                    input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+                    output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+                    input_embeddings[-num_new_tokens:] = input_embeddings_avg
+                    output_embeddings[-num_new_tokens:] = output_embeddings_avg
+
+
+        def update_pointer_token_ids(model_config: transformers.PretrainedConfig,ref_model_config: transformers.PretrainedConfig, tokenizer: transformers.PreTrainedTokenizer):
+            DEFAULT_POINTER_START_TOKEN = "<coord>"
+            DEFAULT_POINTER_END_TOKEN = "</coord>"
+            model_config.pointer_start_token_id = tokenizer.encode(DEFAULT_POINTER_START_TOKEN)[0]
+            model_config.pointer_end_token_id = tokenizer.encode(DEFAULT_POINTER_END_TOKEN)[0]
+            ref_model_config.pointer_start_token_id = tokenizer.encode(DEFAULT_POINTER_START_TOKEN)[0]
+            ref_model_config.pointer_end_token_id = tokenizer.encode(DEFAULT_POINTER_END_TOKEN)[0]
+
+        # Initialize the metrics
+        self._metrics = defaultdict(list)
+        self.experiment = experiment
+        self.step = 0
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
+        self.extract_coord_func = extract_coord_func
+        self.attention_model = attention_model
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -308,13 +349,15 @@ class Qwen2VLGRPOTrainer(Trainer):
             model_init_kwargs["use_cache"] = (
                 False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
-            if "Qwen2-VL" in model_id:
+            if "Qwen2-VL" in model_id and "Attention" not in model_id:
                 model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id:
+            elif "Qwen2.5-VL" in model_id and "Attention" not in model_id:
                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Aria" in model_id:
+            elif "Aria" in model_id and "Attention" not in model_id:
                 model_init_kwargs.pop("use_cache")
                 model = AriaForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+            elif "Qwen2.5-VL" in model_id and "Attention" in model_id:
+                model = Qwen2_5_VLForConditionalGenerationWithAttention.from_pretrained(model, **model_init_kwargs)
             else:
                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
@@ -324,8 +367,9 @@ class Qwen2VLGRPOTrainer(Trainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
-            
-        self.log_memory()
+        
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         self.vision_modules_keywords = ["visual"]
         if peft_config is not None:
@@ -346,7 +390,8 @@ class Qwen2VLGRPOTrainer(Trainer):
             peft_config.target_modules = target_modules
             model = get_peft_model(model, peft_config)
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         if freeze_vision_modules:
             print("Freezing vision modules...")
@@ -358,16 +403,16 @@ class Qwen2VLGRPOTrainer(Trainer):
         if args.gradient_checkpointing:
             model = self._enable_gradient_checkpointing(model, args)
 
-        self.log_memory()
-
         # Reference model
         if is_deepspeed_zero3_enabled():
-            if "Qwen2-VL" in model_id:
+            if "Qwen2-VL" in model_id and "Attention" not in model_id:
                 self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id:
+            elif "Qwen2.5-VL" in model_id and "Attention" not in model_id:
                 self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
-            elif "Aria" in model_id:
+            elif "Aria" in model_id and "Attention" not in model_id:
                 self.ref_model = AriaForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
+            elif "Qwen2.5-VL" in model_id and "Attention" in model_id:
+                self.ref_model = Qwen2_5_VLForConditionalGenerationWithAttention.from_pretrained(model_id, **model_init_kwargs)
             else:
                 self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif peft_config is None:
@@ -378,7 +423,8 @@ class Qwen2VLGRPOTrainer(Trainer):
             # to revert to the initial model.
             self.ref_model = None
         
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Processing class
         if processing_class is None:
@@ -394,7 +440,11 @@ class Qwen2VLGRPOTrainer(Trainer):
                 processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
                 pad_token_id = processing_class.pad_token_id
 
-        self.log_memory()
+        smart_tokenizer_and_embedding_resize(processing_class.tokenizer,model, self.ref_model)
+        update_pointer_token_ids(model.config,self.ref_model.config, processing_class.tokenizer)
+
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -427,7 +477,8 @@ class Qwen2VLGRPOTrainer(Trainer):
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Data collator
         def data_collator(features):  # No data collation is needed in GRPO
@@ -466,9 +517,6 @@ class Qwen2VLGRPOTrainer(Trainer):
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
-
-        # Initialize the metrics
-        self._metrics = defaultdict(list)
 
         super().__init__(
             model=model,
@@ -520,25 +568,6 @@ class Qwen2VLGRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-        
-        self.log_memory()
-    
-    def log_memory(self):
-        gb = 1024 ** 3
-        dev = torch.device('cuda:0')
-        mem = torch.cuda.memory_allocated(dev)/gb
-        vm = psutil.virtual_memory()
-        used_gb   = vm.used / 1e9  
-        self.experiment.log_metrics({'vram':mem,'ram':used_gb}, step = self.current_step_mem)
-        self.current_step_mem += 1
-        
-    def log_completions(self,completion_dict:dict):
-        self.experiment.log_metrics(completion_dict, step = self.current_generate_and_score_step)
-        self.current_generate_and_score_step += 1
-
-    def log_loss_metrics(self,loss_dict:dict):
-        self.experiment.log_metrics(loss_dict, step = self.current_loss_step)
-        self.current_loss_step += 1
 
     def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
@@ -653,9 +682,7 @@ class Qwen2VLGRPOTrainer(Trainer):
         )
 
         return (rewards + add_rewards).view(-1)
-
-
-
+    
 
     def _generate_and_score_completions(self, inputs: dict[str, Union[torch.Tensor, Any]], model) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
@@ -728,7 +755,8 @@ class Qwen2VLGRPOTrainer(Trainer):
             pixel_values = None
             image_grid_thw = None
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # if self.max_prompt_length is not None:
         #     prompt_ids = prompt_ids[:, -self.max_prompt_length :]
@@ -742,13 +770,16 @@ class Qwen2VLGRPOTrainer(Trainer):
                 **prompt_inputs, 
                 generation_config=self.generation_config
             )
+            with torch.no_grad():
+                instantaneous_output = unwrapped_model(**prompt_inputs)
 
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
             # No need to repeat prompt_mask as we're not duplicating prompts during generation
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
@@ -760,7 +791,8 @@ class Qwen2VLGRPOTrainer(Trainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         try:
             pixel_values = prompt_inputs["pixel_values"]
@@ -793,10 +825,18 @@ class Qwen2VLGRPOTrainer(Trainer):
                     )
         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1:]
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Decode the generated completions
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        local_coord = torch.Tensor([self.extract_coord_func(x)[0] for x in completions])
+        local_coord = local_coord.to(f"cuda:{torch.cuda.current_device()}")
+        coordinates = self.accelerator.gather(local_coord)
+
+        image_related_data = {'images':images, "prompt inputs":prompt_inputs, "patch size": self.processing_class.image_processor.patch_size,
+        "merge size":self.processing_class.image_processor.merge_size}
+         
         if is_conversational(inputs[0]):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
@@ -827,12 +867,15 @@ class Qwen2VLGRPOTrainer(Trainer):
                         # No need to duplicate prompts as we're not generating multiple completions per prompt
                         # reward_kwargs[key].extend([example[key]] * self.num_generations)
                         reward_kwargs[key].extend([example[key]])
-                output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, **reward_kwargs)
+                output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, generations=coordinates, 
+                                                 attention_model = self.attention_model,qwen_model_output = instantaneous_output,
+                                                  image_data = image_related_data, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
         # Gather rewards across processes
         rewards_per_func = self.accelerator.gather(rewards_per_func)
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
         
         # Sum the rewards from all reward functions
         rewards = rewards_per_func.sum(dim=1)
@@ -854,7 +897,8 @@ class Qwen2VLGRPOTrainer(Trainer):
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
         
         # Get only the local slice of advantages
         process_slice = slice(
@@ -880,19 +924,8 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards).mean().item())
 
-        self.log_memory()
-
-        self.log_completions({
-        "gen/completion_tokens_mean": float(completion_mask.sum(1).float().mean().item()),
-        "gen/completion_tokens_total": int(completion_mask.sum().item()),
-        "gen/stopped_by_eos_pct": float(is_eos.any(dim=1).float().mean().item()),
-        "gen/empty_completion_pct": float((completion_mask.sum(1) == 0).float().mean().item()),
-        "gen/reward_sum_mean": float(rewards.mean().item()),
-        "gen/reward_sum_std": float(rewards.std(unbiased=False).item()),
-        "gen/group_reward_std_mean": float(std_grouped_rewards.mean().item()),
-        "gen/adv_mean": float(advantages.mean().item()),
-        "gen/adv_std": float(advantages.std(unbiased=False).item()),
-        })
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         return {
             "prompt_ids": prompt_ids,
@@ -928,14 +961,16 @@ class Qwen2VLGRPOTrainer(Trainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Get the current policy's log probabilities
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, pixel_values, image_grid_thw)
         # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
         per_token_logps = per_token_logps[:, prompt_ids.size(1) - 1:]
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
         # Get the advantages from inputs
         advantages = inputs["advantages"]
@@ -969,28 +1004,30 @@ class Qwen2VLGRPOTrainer(Trainer):
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
 
-        self.log_memory()
+        self._metrics['ram'].append(log_memory()['ram'])
+        self._metrics['vram'].append(log_memory()['vram'])
 
-        self.log_loss_metrics({
-        "loss": loss.item(),
-        "clip_ratio": clip_ratio.item(),
-        "kl_mean": mean_kl.item() if self.beta > 0 else None,
-        "tokens_masked": float(completion_mask.sum().item()),
-        "avg_completion_tokens": float(completion_mask.sum(1).float().mean().item()),
-        "ratio_mean": float(torch.exp(per_token_logps - old_per_token_logps)[completion_mask.bool()].mean().item()),
-        })
+        self._metrics['loss'].append(loss.item())
 
         # print("loss0:", loss)
         return loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        if len(self._metrics['ram']) != 0:
+            self._metrics['ram'] = [max(self._metrics['ram'])]
+            self._metrics['vram'] = [max(self._metrics['vram'])]
+        else:
+            self._metrics['ram'] = [0]
+            self._metrics['vram'] = [0]
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
+        self.experiment.log_metrics(metrics,step=self.step)
         self._metrics.clear()
+        self.step += 1
 
     def create_model_card(
         self,

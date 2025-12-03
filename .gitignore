@@ -8,3 +8,7 @@
 .gitattributes
 /ckpt
 *Instruct
+.env
+*.err
+*.out
+*.pt
