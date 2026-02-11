@@ -1,3 +1,1498 @@
+# # Copyright 2025 The HuggingFace Team. All rights reserved.
+# #
+# # Licensed under the Apache License, Version 2.0 (the "License");
+# # you may not use this file except in compliance with the License.
+# # You may obtain a copy of the License at
+# #
+# #     http://www.apache.org/licenses/LICENSE-2.0
+# #
+# # Unless required by applicable law or agreed to in writing, software
+# # distributed under the License is distributed on an "AS IS" BASIS,
+# # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# # See the License for the specific language governing permissions and
+# # limitations under the License.
+
+# import os
+# import textwrap
+# from collections import defaultdict
+# from typing import Any, Callable, Optional, Union, Sized
+# import sys
+# import re
+# import torch
+# import torch.utils.data
+# import transformers
+# from datasets import Dataset, IterableDataset
+# from packaging import version
+# from transformers import (
+#     AriaForConditionalGeneration,
+#     AriaProcessor,
+#     AutoModelForCausalLM,
+#     AutoModelForSequenceClassification,
+#     AutoProcessor,
+#     AutoTokenizer,
+#     GenerationConfig,
+#     PreTrainedModel,
+#     PreTrainedTokenizerBase,
+#     Qwen2VLForConditionalGeneration,
+#     Qwen2_5_VLForConditionalGeneration,
+#     Trainer,
+#     TrainerCallback,
+#     is_wandb_available,
+# )
+# from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+# from transformers.utils import is_peft_available
+# import torch.distributed as dist
+# from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+# from trl.models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+# from trl.trainer.grpo_config import GRPOConfig
+# from trl.trainer.utils import generate_model_card, get_comet_experiment_url
+# from ..qwen25_attention import Qwen2_5_VLForConditionalGenerationWithAttention
+# from accelerate.utils import is_peft_model, set_seed
+# from trl import ScriptArguments
+# import PIL.Image
+# import numpy as np
+# import copy
+# from torch.utils.data import Sampler
+# import warnings
+# from .. import qwen25_attention
+# if is_peft_available():
+#     from peft import PeftConfig, get_peft_model
+
+# if is_wandb_available():
+#     import wandb
+
+# import comet_ml
+# import psutil
+# from dotenv import load_dotenv
+# # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
+# # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+# RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+
+# def log_memory():
+#     gb = 1024 ** 3
+#     dev = torch.cuda.current_device()
+#     mem = torch.cuda.memory_allocated(f"cuda:{dev}")/gb
+#     vm = psutil.virtual_memory()
+#     used_gb   = vm.used / 1e9  
+#     return {'vram':mem,'ram':used_gb}
+
+# import math
+# def smart_resize(
+#     height: int, width: int, factor: int = 28, min_pixels: int = 56 * 56, max_pixels: int = 14 * 14 * 4 * 1280
+# ):
+#     """Rescales the image so that the following conditions are met:
+
+#     1. Both dimensions (height and width) are divisible by 'factor'.
+
+#     2. The total number of pixels is within the range ['min_pixels', 'max_pixels'].
+
+#     3. The aspect ratio of the image is maintained as closely as possible.
+
+#     """
+#     if height < factor or width < factor:
+#         raise ValueError(f"height:{height} or width:{width} must be larger than factor:{factor}")
+#     elif max(height, width) / min(height, width) > 200:
+#         raise ValueError(
+#             f"absolute aspect ratio must be smaller than 200, got {max(height, width) / min(height, width)}"
+#         )
+#     h_bar = round(height / factor) * factor
+#     w_bar = round(width / factor) * factor
+#     if h_bar * w_bar > max_pixels:
+#         beta = math.sqrt((height * width) / max_pixels)
+#         h_bar = math.floor(height / beta / factor) * factor
+#         w_bar = math.floor(width / beta / factor) * factor
+#     elif h_bar * w_bar < min_pixels:
+#         beta = math.sqrt(min_pixels / (height * width))
+#         h_bar = math.ceil(height * beta / factor) * factor
+#         w_bar = math.ceil(width * beta / factor) * factor
+#     return h_bar, w_bar
+
+
+# class RepeatRandomSampler(Sampler):
+#     """
+#     Sampler that repeats the indices of a dataset in a structured manner.
+
+#     Args:
+#         data_source (`Sized`):
+#             Dataset to sample from.
+#         mini_repeat_count (`int`):
+#             Number of times to repeat each index per batch.
+#         batch_size (`int`, *optional*, defaults to `1`):
+#             Number of unique indices per batch.
+#         repeat_count (`int`, *optional*, defaults to `1`):
+#             Number of times to repeat the full sampling process.
+#         seed (`int` or `None`, *optional*, defaults to `None`):
+#             Random seed for reproducibility.
+#     """
+
+#     def __init__(
+#         self,
+#         data_source: Sized,
+#         mini_repeat_count: int,
+#         batch_size: int = 1,
+#         repeat_count: int = 1,
+#         seed: Optional[int] = None,
+#     ):
+#         self.data_source = data_source
+#         self.mini_repeat_count = mini_repeat_count
+#         self.batch_size = batch_size
+#         self.repeat_count = repeat_count
+#         self.num_samples = len(data_source)
+#         self.seed = seed
+#         self.generator = torch.Generator()
+#         if seed is not None:
+#             self.generator.manual_seed(seed)
+
+#     def __iter__(self):
+#         indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+#         indexes = [indexes[i : i + self.batch_size] for i in range(0, len(indexes), self.batch_size)]
+#         indexes = [chunk for chunk in indexes if len(chunk) == self.batch_size]
+
+#         for chunk in indexes:
+#             for _ in range(self.repeat_count):
+#                 for index in chunk:
+#                     for _ in range(self.mini_repeat_count):
+#                         yield index
+
+#     def __len__(self) -> int:
+#         return self.num_samples * self.mini_repeat_count * self.repeat_count
+
+
+# class Qwen2VLGRPOTrainer(Trainer):
+#     """
+#     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
+#     paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300).
+
+#     Example:
+
+#     ```python
+#     from datasets import load_dataset
+#     from trl import GRPOTrainer
+
+#     dataset = load_dataset("trl-lib/tldr", split="train")
+
+#     trainer = GRPOTrainer(
+#         model="Qwen/Qwen2-0.5B-Instruct",
+#         reward_funcs="weqweasdas/RM-Gemma-2B",
+#         train_dataset=dataset,
+#     )
+
+#     trainer.train()
+#     ```
+
+#     Args:
+#         model (`Union[str, PreTrainedModel]`):
+#             Model to be trained. Can be either:
+
+#             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
+#               a path to a *directory* containing model weights saved using
+#               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
+#               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
+#               in `args.model_init_kwargs`.
+#             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+#         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+#             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
+#             functions with the prompts and completions and sum the rewards. Can be either:
+
+#             - A single reward function, such as:
+#                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
+#                 path to a *directory* containing model weights saved using
+#                 [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+#                 using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the
+#                 keyword arguments in `args.model_init_kwargs`.
+#                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
+#                 - A custom reward function: The function is provided with the prompts and the generated completions,
+#                   plus any additional columns in the dataset. It should return a list of rewards. For more details, see
+#                   [Using a custom reward function](#using-a-custom-reward-function).
+#             - A list of reward functions, where each item can independently be any of the above types. Mixing different
+#             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+#         args ([`GRPOConfig`], *optional*, defaults to `None`):
+#             Configuration for this trainer. If `None`, a default configuration is used.
+#         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+#             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
+#             ignored. The format of the samples can be either:
+
+#             - [Standard](dataset_formats#standard): Each sample contains plain text.
+#             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+#               and content).
+#         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+#             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
+#         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+#             Processing class used to process the data. The padding side must be set to "left". If `None`, the
+#             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`].
+#         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
+#             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
+
+#             - A single processing class: Used when `reward_funcs` contains only one reward function.
+#             - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
+#             If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
+#             `None`, the tokenizer for the model is automatically loaded using [`~transformers.AutoTokenizer.from_pretrained`].
+#             For elements in `reward_funcs` that are custom reward functions (not [`~transformers.PreTrainedModel`]),
+#             the corresponding entries in `reward_processing_classes` are ignored.
+#         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+#             List of callbacks to customize the training loop. Will add those to the list of default callbacks
+#             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+
+#             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
+#             method.
+#         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+#             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
+#             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
+#         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+#             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+#     """
+
+#     def __init__(
+#         self,
+#         model: Union[str, PreTrainedModel],
+#         reward_funcs: Union[RewardFunc, list[RewardFunc]],
+#         args: GRPOConfig = None,
+#         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+#         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
+#         processing_class: Optional[PreTrainedTokenizerBase] = None,
+#         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
+#         callbacks: Optional[list[TrainerCallback]] = None,
+#         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+#         peft_config: Optional["PeftConfig"] = None,
+#         freeze_vision_modules: Optional[bool] = False,
+#         dast_a: Optional[float] = -0.5,
+#         dast_b: Optional[float] = 0.5,
+#         max_pixels: Optional[int] = 12845056,
+#         min_pixels: Optional[int] = 3136,
+#         attn_implementation: str = "flash_attention_2",
+#         torch_dtype: str = "bfloat16",
+#         experiment: comet_ml.start = None,
+#         extract_coord_func : str = None,
+#         script_args: Optional[ScriptArguments] = None
+#     ):
+
+#         if dist.get_rank() == 0:
+#             load_dotenv()
+#             os.getenv('COMET_API_KEY')
+#             env_key = os.getenv('DAST_EXP_NAME')
+#             experiment_config = comet_ml.ExperimentConfig(name=env_key)
+#             self.experiment = comet_ml.start(project_name="ui-r1-attention", experiment_config=experiment_config)
+
+#         self._metrics = defaultdict(list)
+#         self.step = 0
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+#         self.extract_coord_func = extract_coord_func
+#         # Args
+#         if args is None:
+#             model_name = model if isinstance(model, str) else model.config._name_or_path
+#             model_name = model_name.split("/")[-1]
+#             args = GRPOConfig(f"{model_name}-GRPO")
+
+#         # Models
+#         # Trained model
+#         model_init_kwargs = args.model_init_kwargs or {}
+#         model_init_kwargs["attn_implementation"] = attn_implementation
+#         # model_init_kwargs['mode'] = script_args.mode
+#         if model_init_kwargs.get("torch_dtype") is None:
+#             model_init_kwargs["torch_dtype"] = torch_dtype
+#         if isinstance(model, str):
+#             model_id = model
+#             torch_dtype = model_init_kwargs.get("torch_dtype")
+#             if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+#                 pass  # torch_dtype is already a torch.dtype or "auto" or None
+#             elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+#                 torch_dtype = getattr(torch, torch_dtype)
+#                 model_init_kwargs["torch_dtype"] = torch_dtype
+#             else:
+#                 raise ValueError(
+#                     "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+#                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+#                 )
+#             # Disable caching if gradient checkpointing is enabled (not supported)
+#             model_init_kwargs["use_cache"] = (
+#                 False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
+#             )
+#             if "Qwen2-VL" in model_id and "Attention" not in model_id:
+#                 model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+#             elif "Qwen2.5-VL" in model_id and "Attention" not in model_id:
+#                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+#             elif "Aria" in model_id and "Attention" not in model_id:
+#                 model_init_kwargs.pop("use_cache")
+#                 model = AriaForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+#             elif "Qwen2.5-VL" in model_id and "Attention" in model_id:
+#                 # model = Qwen2_5_VLForConditionalGenerationWithAttention.from_pretrained(model, **model_init_kwargs)
+#                 model = None
+#             else:
+#                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            
+#             # self.setup_params_to_update(model,script_args)
+#         else:
+#             model_id = model.config._name_or_path
+#             if args.model_init_kwargs is not None:
+#                 raise ValueError(
+#                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+#                     "This argument can only be used when the `model` argument is a string."
+#                 )
+        
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         self.vision_modules_keywords = ["visual"]
+#         if peft_config is not None:
+#             def find_all_linear_names(model, multimodal_keywords):
+#                 cls = torch.nn.Linear
+#                 lora_module_names = set()
+#                 for name, module in model.named_modules():
+#                     # LoRA is not applied to the vision modules
+#                     if any(mm_keyword in name for mm_keyword in multimodal_keywords):
+#                         continue
+#                     if isinstance(module, cls):
+#                         lora_module_names.add(name)
+#                 for m in lora_module_names:  # needed for 16-bit
+#                     if "embed_tokens" in m:
+#                         lora_module_names.remove(m)
+#                 return list(lora_module_names)
+#             target_modules = find_all_linear_names(model, self.vision_modules_keywords)
+#             peft_config.target_modules = target_modules
+#             model = get_peft_model(model, peft_config)
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # if freeze_vision_modules:
+#         #     print("Freezing vision modules...")
+#         #     for n, p in model.named_parameters():
+#         #         if any(keyword in n for keyword in self.vision_modules_keywords):
+#         #             p.requires_grad = False
+
+#         # Enable gradient checkpointing if requested
+#         if args.gradient_checkpointing:
+#             model = self._enable_gradient_checkpointing(model, args)
+
+#         # Reference model
+#         if is_deepspeed_zero3_enabled():
+#             if "Qwen2-VL" in model_id and "Attention" not in model_id:
+#                 self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
+#             elif "Qwen2.5-VL" in model_id and "Attention" not in model_id:
+#                 self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
+#             elif "Aria" in model_id and "Attention" not in model_id:
+#                 self.ref_model = AriaForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
+#             elif "Qwen2.5-VL" in model_id and "Attention" in model_id:
+#                 # self.ref_model = Qwen2_5_VLForConditionalGenerationWithAttention.from_pretrained(model_id, **model_init_kwargs)
+#                 self.ref_model = None
+
+#             else:
+#                 self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+#         elif peft_config is None:
+#             # If PEFT configuration is not provided, create a reference model based on the initial model.
+#             self.ref_model = create_reference_model(model)
+#         else:
+#             # If PEFT is used, the reference model is not needed since the adapter can be disabled
+#             # to revert to the initial model.
+#             self.ref_model = None
+        
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Processing class
+#         if processing_class is None:
+#             if "Qwen2-VL" in model_id or "Qwen2.5-VL" in model_id or "Aria" in model_id:
+#                 processing_class = AutoProcessor.from_pretrained(model_id)
+#                 pad_token_id = processing_class.tokenizer.pad_token_id
+#                 processing_class.pad_token_id = pad_token_id
+#                 processing_class.eos_token_id = processing_class.tokenizer.eos_token_id
+#                 if "Qwen" in model_id or "Qwen2.5-VL" in model_id:
+#                     processing_class.image_processor.max_pixels = max_pixels
+#                     processing_class.image_processor.min_pixels = min_pixels
+#             else:
+#                 processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+#                 pad_token_id = processing_class.pad_token_id
+
+#         # self.smart_tokenizer_and_embedding_resize(processing_class.tokenizer,model, self.ref_model)
+#         # self.update_pointer_token_ids(model,self.ref_model, processing_class.tokenizer)
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Reward functions
+#         if not isinstance(reward_funcs, list):
+#             reward_funcs = [reward_funcs]
+#         for i, reward_func in enumerate(reward_funcs):
+#             if isinstance(reward_func, str):
+#                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
+#                     reward_func, num_labels=1, **model_init_kwargs
+#                 )
+#         self.reward_funcs = reward_funcs
+
+#         # Reward processing class
+#         if reward_processing_classes is None:
+#             reward_processing_classes = [None] * len(reward_funcs)
+#         elif not isinstance(reward_processing_classes, list):
+#             reward_processing_classes = [reward_processing_classes]
+#         else:
+#             if len(reward_processing_classes) != len(reward_funcs):
+#                 raise ValueError("The number of reward processing classes must match the number of reward functions.")
+
+#         for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
+#             if isinstance(reward_func, PreTrainedModel):
+#                 if reward_processing_class is None:
+#                     reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
+#                 if reward_processing_class.pad_token_id is None:
+#                     reward_processing_class.pad_token = reward_processing_class.eos_token
+#                 # The reward model computes the reward for the latest non-padded token in the input sequence.
+#                 # So it's important to set the pad token ID to the padding token ID of the processing class.
+#                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+#                 reward_processing_classes[i] = reward_processing_class
+#         self.reward_processing_classes = reward_processing_classes
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Data collator
+#         def data_collator(features):  # No data collation is needed in GRPO
+#             return features
+
+#         # Training arguments
+#         self.max_prompt_length = args.max_prompt_length
+#         self.max_prompt_length = None
+#         if args.max_prompt_length is not None:
+#             warnings.warn("Setting max_prompt_length is currently not supported, it has been set to None")
+
+#         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
+#         self.num_generations = args.num_generations  # = G in the GRPO paper
+#         self.generation_config = GenerationConfig(
+#             max_new_tokens=self.max_completion_length,
+#             do_sample=True,  
+#             temperature=1,
+#             pad_token_id=pad_token_id,
+#         )
+#         self.dast_a = dast_a
+#         self.dast_b = dast_b
+#         self.beta = args.beta
+#         self.epsilon = args.epsilon
+
+#         # Multi-step
+#         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
+#         # Tracks the number of iterations (forward + backward passes), including those within a gradient accumulation cycle
+#         self._step = 0
+#         # Buffer the batch to reuse generated outputs across multiple updates
+#         self._buffered_inputs = [None] * args.gradient_accumulation_steps
+
+#         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+#         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
+#         # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
+#         # "Could not estimate the number of tokens of the input, floating-point operations will not be computed." To
+#         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
+#         # This acts as a flag to indicate that the warning has already been issued.
+#         model.warnings_issued["estimate_tokens"] = True
+
+#         super().__init__(
+#             model=model,
+#             args=args,
+#             data_collator=data_collator,
+#             train_dataset=train_dataset,
+#             eval_dataset=eval_dataset,
+#             processing_class=processing_class,
+#             callbacks=callbacks,
+#             optimizers=optimizers,
+#         )
+
+#         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
+#         num_processes = self.accelerator.num_processes
+#         global_batch_size = args.per_device_train_batch_size * num_processes
+#         possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+#         if self.num_generations not in possible_values:
+#             raise ValueError(
+#                 f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
+#                 f"divisible by the number of generations per prompt ({self.num_generations}). Given the current train "
+#                 f"batch size, the valid values for the number of generations are: {possible_values}."
+#             )
+#         if self.args.eval_strategy != "no":
+#             global_batch_size = args.per_device_eval_batch_size * num_processes
+#             possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+#             if self.num_generations not in possible_values:
+#                 raise ValueError(
+#                     f"The global eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be evenly "
+#                     f"divisible by the number of generations per prompt ({self.num_generations}). Given the current "
+#                     f"eval batch size, the valid values for the number of generations are: {possible_values}."
+#                 )
+
+#         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+#         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
+#         # it's safer to set it in all cases.
+#         set_seed(args.seed, device_specific=True)
+
+#         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+#         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+#         # self.model_accepts_loss_kwargs to False to enable scaling.
+#         self.model_accepts_loss_kwargs = False
+
+#         if self.ref_model is not None:
+#             if self.is_deepspeed_enabled:
+#                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+#             else:
+#                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+#         for i, reward_func in enumerate(self.reward_funcs):
+#             if isinstance(reward_func, PreTrainedModel):
+#                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+
+#     # def smart_tokenizer_and_embedding_resize(
+#     #         self,
+#     #         tokenizer: transformers.PreTrainedTokenizer,
+#     #         model: transformers.PreTrainedModel,
+#     #         ref_model : transformers.PreTrainedModel
+#     #     ):
+#     #         """Resize tokenizer and embedding.
+
+#     #         Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
+#     #         """
+#     #         # num_new_tokens = tokenizer.add_special_tokens( {'additional_special_tokens':["<coord>","<coordinate>","</coord>"]})
+#     #         num_new_tokens = tokenizer.add_special_tokens( {'additional_special_tokens':["<|pointer_start|>","<|pointer_end|>","<|pointer_pad|>"]})
+#     #         # num_new_tokens = tokenizer.add_special_tokens( {'additional_special_tokens':["<answer><answer>","<coordinate>","</answer></answer>"]})
+
+
+#     #         model.resize_token_embeddings(len(tokenizer))
+
+#     #         if ref_model is not None:
+#     #             ref_model.resize_token_embeddings(len(tokenizer))
+
+#     #         new_vocab_size = len(tokenizer)    
+#     #         # Update base model and current model config
+#     #         if hasattr(model.config, "text_config"):
+#     #             model.config.text_config.vocab_size = new_vocab_size
+#     #         else:
+#     #             model.config.vocab_size = new_vocab_size
+#     #         model.vocab_size = new_vocab_size
+
+#     #         if ref_model is not None and  hasattr(ref_model.config, "text_config"):
+#     #             ref_model.config.text_config.vocab_size = new_vocab_size
+#     #         else:
+#     #             ref_model.config.vocab_size = new_vocab_size
+#     #         ref_model.vocab_size = new_vocab_size
+
+#     #         for mod in [x for x in [model, ref_model] if x is not None]:
+#     #             if num_new_tokens > 0:
+#     #                 input_embeddings = mod.get_input_embeddings().weight.data
+#     #                 output_embeddings = mod.get_output_embeddings().weight.data
+
+#     #                 input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+#     #                 output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+#     #                 input_embeddings[-num_new_tokens:] = input_embeddings_avg
+#     #                 output_embeddings[-num_new_tokens:] = output_embeddings_avg
+
+#     # def update_pointer_token_ids(self, model: transformers,ref_model: transformers, tokenizer: transformers.PreTrainedTokenizer):
+#     #     # DEFAULT_POINTER_START_TOKEN = "<coord>"
+#     #     # DEFAULT_POINTER_END_TOKEN = "</coord>"
+#     #     # DEFAULT_POINTER_PAD_TOKEN = "<coordinate>"
+#     #     DEFAULT_POINTER_START_TOKEN = "<|pointer_start|>"
+#     #     DEFAULT_POINTER_END_TOKEN = "<|pointer_end|>"
+#     #     DEFAULT_POINTER_PAD_TOKEN = "<|pointer_pad|>"
+#     #     # DEFAULT_POINTER_START_TOKEN = "<answer><answer>"
+#     #     # DEFAULT_POINTER_END_TOKEN = "</answer></answer>"
+#     #     # DEFAULT_POINTER_PAD_TOKEN = "<coordinate>"
+#     #     model.config.pointer_start_token_id = tokenizer.encode(DEFAULT_POINTER_START_TOKEN)[0]
+#     #     model.config.pointer_end_token_id = tokenizer.encode(DEFAULT_POINTER_END_TOKEN)[0]
+#     #     model.config.pointer_pad_token_id = tokenizer.encode(DEFAULT_POINTER_PAD_TOKEN)[0]
+#     #     if ref_model is not None:
+#     #         ref_model.config.pointer_start_token_id = tokenizer.encode(DEFAULT_POINTER_START_TOKEN)[0]
+#     #         ref_model.config.pointer_end_token_id = tokenizer.encode(DEFAULT_POINTER_END_TOKEN)[0]
+#     #         ref_model.config.pointer_pad_token_id = tokenizer.encode(DEFAULT_POINTER_PAD_TOKEN)[0]
+    
+#     def rank0_print(self,*args):
+#         if dist.is_initialized():
+#             if dist.get_rank() == 0:
+#                 print(f"Rank {dist.get_rank()}: ", *args)
+#         else:
+#             print(*args)
+
+#     # def setup_params_to_update(self,model: transformers.PreTrainedModel, training_args: ScriptArguments):
+#     #     if training_args.warmup:
+#     #         self.rank0_print(f"freezing all model parameters...")
+#     #         for p in model.parameters():
+#     #             p.requires_grad = False
+#     #         self.rank0_print(f"Unfreezing pointer head parameters...")
+#     #         if training_args.mode == 'binary_head':
+#     #             for p in model.binary_multi_patch_pointer_head.parameters():
+#     #                 p.requires_grad = True
+#     #         elif training_args.mode =="v2p" or training_args.mode == "actor":
+#     #             for p in model.multi_patch_pointer_head.parameters():
+#     #                 p.requires_grad = True
+#     #     elif training_args.full_train:
+#     #         self.rank0_print(f"unfreezing all model parameters...")
+#     #         for p in model.parameters():
+#     #             p.requires_grad = True
+        
+#     #     if training_args.unfreeze_new_tokens:
+#     #         self.rank0_print(f"Unfreezing new tokens parameters via embedding hook...")
+#     #         model.model.embed_tokens.weight.requires_grad = True
+#     #         # Registering hook before Trainer initialization is invalid, so it is disabled
+#     #         # model.model.embed_tokens.weight.register_hook(mask_embedding_grad)
+
+
+#     def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
+#         """Enables gradient checkpointing for the model."""
+#         # Ensure use_cache is disabled
+#         model.config.use_cache = False
+
+#         # Enable gradient checkpointing on the base model for PEFT
+#         if is_peft_model(model):
+#             model.base_model.gradient_checkpointing_enable()
+#         # Enable gradient checkpointing for non-PEFT models
+#         else:
+#             model.gradient_checkpointing_enable()
+
+#         gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+#         use_reentrant = (
+#             "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
+#         )
+
+#         if use_reentrant:
+#             model.enable_input_require_grads()
+
+#         return model
+    
+#     def _set_signature_columns_if_needed(self):
+#         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+#         # By default, this method sets `self._signature_columns` to the model's expected inputs.
+#         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+#         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
+#         if self._signature_columns is None:
+#             self._signature_columns = ["prompt"]
+
+
+#     # Get the per-token log probabilities for the completions for the model and the reference model
+#     def _get_per_token_logps(self, model, input_ids, attention_mask, pixel_values, image_grid_thw):
+#         logits = model(input_ids, attention_mask=attention_mask, pixel_values=pixel_values, image_grid_thw=image_grid_thw).logits  # (B, L, V)
+#         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+#         input_ids = input_ids[:, 1:]  # (B, L-1), exclude the first input ID since we don't have logits for it
+#         # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+#         per_token_logps = []
+#         # print(torch.cuda.memory_summary())
+#         for logits_row, input_ids_row in zip(logits, input_ids):
+#             log_probs = logits_row.log_softmax(dim=-1)
+#             token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
+#             per_token_logps.append(token_log_prob)
+#         return torch.stack(per_token_logps)
+
+
+#     def _prepare_inputs(self, inputs):
+#         # Simple pass-through, just like original
+#         return inputs
+#     # def _add_completion_length_to_rewards(self, rewards: torch.Tensor, completion_token_length: torch.Tensor) -> torch.Tensor:
+#     #     # 假设 rewards 和 completion_token_length 的 shape 都是 (batch_size * num_generations,)
+#     #     # 我们需要 reshape 成 (batch_size, num_generations)
+#     #     rewards = rewards.view(-1, self.num_generations)
+#     #     completion_token_length = completion_token_length.view(-1, self.num_generations)
+
+#     #     # 初始化新的 rewards
+#     #     new_rewards = rewards.clone()
+
+#     #     # 遍历每个 batch
+#     #     for i in range(rewards.size(0)):
+#     #         group_rewards = rewards[i]
+#     #         group_lengths = completion_token_length[i]
+
+#     #         # 找出哪些是 reward == 3 的位置
+#     #         mask = (group_rewards == 3)
+
+#     #         if mask.sum() > 1:
+#     #             # 多个 reward 为 3 的情况，找出对应的最小 completion_token_length 的索引
+#     #             min_len_idx = torch.argmin(group_lengths[mask])
+#     #             # 获取在原始 group 中的索引位置
+#     #             true_idx = torch.nonzero(mask, as_tuple=False)[min_len_idx]
+#     #             # 将对应位置的 reward 加 1
+#     #             new_rewards[i, true_idx] += 1
+
+#     #     return new_rewards.view(-1)
+#     def _add_completion_length_to_rewards(self, rewards: torch.Tensor, completion_token_length: torch.Tensor) -> torch.Tensor:
+#         assert rewards.size(0) == completion_token_length.size(0), "rewards and completion_token_length must have the same size"
+
+#         # reshape 成 (batch_size, num_generations)
+#         B, N = -1, self.num_generations
+#         rewards = rewards.view(B, N).float()
+#         lengths = completion_token_length.view(B, N).float()
+
+#         # 是否为 reward == 3
+#         is_three = rewards == 3
+
+#         # p: 每组中 reward == 3 的比例，shape: (batch_size,)
+#         p = is_three.sum(dim=1) / N  # (B,)
+
+#         # Lr: 每组中 reward==3 的 token length 均值，若无为 0，shape: (B,)
+#         Lr = torch.where(
+#             is_three.any(dim=1),
+#             (lengths * is_three).sum(dim=1) / is_three.sum(dim=1).clamp(min=1),
+#             torch.zeros_like(p)
+#         )
+
+#         # Lmax: 每组最大长度，shape: (B,)
+#         Lmax = lengths.max(dim=1).values
+
+#         # Lb: p * Lr + (1 - p) * Lmax
+#         Lb = p * Lr + (1 - p) * Lmax  # (B,)
+
+#         # lambdas = (L - Lb) / Lb
+#         lambdas = (lengths - Lb.unsqueeze(1)) / Lb.unsqueeze(1)  # (B, N)
+
+#         # add rewards based on reward==3 mask
+#         add_rewards = torch.where(
+#             is_three,
+#             torch.clamp(self.dast_a * lambdas + self.dast_b, min=0.1),
+#             torch.clamp(0.9 * lambdas - 0.1, max=-0.1)
+#         )
+
+#         return (rewards + add_rewards).view(-1)
+
+#     def get_multi_patch_labels(self,image_processor, image, bbox_gt, resized_dimension):
+#         """
+#         Get the multi-patch labels for the bounding box.
+#         Args:
+#             image_processor: the image processor
+#             image: the image in PIL format
+#             bbox_gt: the bounding box in the format of (x_min, y_min, x_max, y_max) [0,1]
+#         """
+#         if bbox_gt is None:
+#             return None
+
+#         scale_x, scale_y = [x.item() for x in resized_dimension]
+#         w, h = image.size
+
+#         w, h = [round(w*scale_x), round(h*scale_y)]
+
+#         bbox_gt = [bbox_gt[0]*scale_x, bbox_gt[1]*scale_y, bbox_gt[2]*scale_x, bbox_gt[3]*scale_y]
+#         bbox_gt = map(round,bbox_gt)
+
+#         x_min, y_min, x_max, y_max = bbox_gt
+#         x_min = max(0, x_min)
+#         y_min = max(0, y_min)
+#         x_max = min(w, x_max)
+#         y_max = min(h, y_max)
+
+#         merge_patch_size = image_processor.patch_size * image_processor.merge_size
+#         assert w % merge_patch_size == 0 and h % merge_patch_size == 0, f"Image size {w}x{h} is not divisible by merge_patch_size {merge_patch_size}"
+#         grid_h, grid_w = h // merge_patch_size, w // merge_patch_size
+
+#         binary_mask = torch.zeros(grid_h * grid_w)
+#         # Iterate through all patches, check if they overlap with the bounding box
+#         for y_idx in range(grid_h):
+#             for x_idx in range(grid_w):
+#                 # Calculate patch boundaries
+#                 patch_x_min = x_idx * merge_patch_size
+#                 patch_y_min = y_idx * merge_patch_size
+#                 patch_x_max = patch_x_min + merge_patch_size
+#                 patch_y_max = patch_y_min + merge_patch_size
+                
+#                 # Check if patch overlaps with the bounding box
+#                 if not (patch_x_max <= x_min or patch_x_min >= x_max or 
+#                         patch_y_max <= y_min or patch_y_min >= y_max):
+#                     # Calculate patch index in the flattened grid
+#                     patch_idx = y_idx * grid_w + x_idx
+#                     binary_mask[patch_idx] = 1
+
+#         return binary_mask.to(f"cuda:{torch.cuda.current_device()}")
+    
+#     def get_grid_values(self,image_processor, image,resized_dimension):
+#         scale_x, scale_y = [x.item() for x in resized_dimension]
+#         w, h = image.size
+#         w, h = [round(w*scale_x), round(h*scale_y)]
+#         merge_patch_size = image_processor.patch_size * image_processor.merge_size
+#         assert w % merge_patch_size == 0 and h % merge_patch_size == 0, f"Image size {w}x{h} is not divisible by merge_patch_size {merge_patch_size}"
+#         grid_h, grid_w = h // merge_patch_size, w // merge_patch_size
+#         return (grid_h,grid_w)
+
+#     def get_patch_centers(self,image_processor, image, resized_dimensions):
+#         scale_x, scale_y = [x.item() for x in resized_dimensions]
+#         w, h = image.size
+#         w, h = [round(w*scale_x), round(h*scale_y)]
+#         merge_patch_size = image_processor.patch_size * image_processor.merge_size
+#         assert w % merge_patch_size == 0 and h % merge_patch_size == 0, f"Image size {w}x{h} is not divisible by merge_patch_size {merge_patch_size}"
+#         grid_h, grid_w = h // merge_patch_size, w // merge_patch_size
+#         total_patches = torch.arange(grid_h*grid_w).to(f'cuda:{torch.cuda.current_device()}')
+
+#         x_index = lambda index : index % (w // merge_patch_size)
+#         y_index = lambda index : index // (w // merge_patch_size)
+
+#         # computing the respective side of the image patch
+#         x_center = torch.vmap(x_index)(total_patches) * merge_patch_size + merge_patch_size/2 
+#         y_center = torch.vmap(y_index)(total_patches) * merge_patch_size + merge_patch_size/2 
+
+#         return torch.stack((x_center,y_center),dim=0).to(f'cuda:{torch.cuda.current_device()}')
+    
+#     def get_center_and_extremities(self,image_processor, image, bbox_gt, resized_dimensions):
+        
+#         if bbox_gt is None:
+#             return None
+
+#         normal_cdf = lambda z : 0.5 * (1.0 + torch.erf(z / math.sqrt(2.0)))
+#         # Get the original image size and the resized image size
+#         scale_x, scale_y = [x.item() for x in resized_dimensions]
+#         w, h = image.size
+
+#         w, h = [round(w*scale_x), round(h*scale_y)]
+
+#         bbox_gt = [bbox_gt[0]*scale_x, bbox_gt[1]*scale_y, bbox_gt[2]*scale_x, bbox_gt[3]*scale_y]
+#         bbox_gt = map(round,bbox_gt)
+
+#         x_min, y_min, x_max, y_max = bbox_gt
+#         x_min = max(0, x_min)
+#         y_min = max(0, y_min)
+#         x_max = min(w, x_max)
+#         y_max = min(h, y_max)
+
+#         center_x, center_y = (x_min + ((x_max-x_min)//2),y_min + ((y_max - y_min)//2))
+
+#         merge_patch_size = image_processor.patch_size * image_processor.merge_size
+#         assert w % merge_patch_size == 0 and h % merge_patch_size == 0, f"Image size {w}x{h} is not divisible by merge_patch_size {merge_patch_size}"
+#         grid_h, grid_w = h // merge_patch_size, w // merge_patch_size
+#         total_patches = torch.arange(grid_h*grid_w).to(f'cuda:{torch.cuda.current_device()}')
+
+
+
+#         x_index = lambda index : index % (w // merge_patch_size)
+#         y_index = lambda index : index // (w // merge_patch_size)
+
+#         # computing the respective side of the image patch
+#         xmax = torch.vmap(x_index)(total_patches) * merge_patch_size + merge_patch_size 
+#         xmin = torch.vmap(x_index)(total_patches) * merge_patch_size 
+#         ymax = torch.vmap(y_index)(total_patches) * merge_patch_size + merge_patch_size 
+#         ymin = torch.vmap(y_index)(total_patches) * merge_patch_size  
+
+#         # -----------------------VARIANCE MODIFICATIONS 
+
+#         z_value = 1
+#         ratio = (x_max-x_min)/(y_max-y_min)
+#         if ratio >= 1 :
+#             sigma_x = (x_max-x_min) / (z_value * ratio)
+#             sigma_y = (y_max-y_min) / z_value
+#         else:
+#             sigma_x = (x_max-x_min) / z_value
+#             sigma_y = (y_max-y_min) / (z_value / ratio)
+
+#         # CDF MODIFICATIONS  ---------------------------------
+
+#         sigma_floor = 0.5 * merge_patch_size
+#         sigma_x = max(sigma_x, sigma_floor)
+#         sigma_y = max(sigma_y, sigma_floor)
+
+#         zx_min = (xmin - center_x) / sigma_x
+#         zx_max = (xmax - center_x) / sigma_x
+#         zy_min = (ymin - center_y) / sigma_y
+#         zy_max = (ymax - center_y) / sigma_y
+
+#         mass_x = (normal_cdf(zx_max) - normal_cdf(zx_min))
+#         mass_y = (normal_cdf(zy_max) - normal_cdf(zy_min))
+
+#         patch_mass = mass_x * mass_y  
+#         eps = 1e-8
+#         gaussian = (patch_mass / (patch_mass.sum() + eps)).clamp_min(0.0001)
+
+#         # ----------------------------------imae printing
+
+#         # gaussian_resized = torch.reshape(gaussian,(grid_h, grid_w))
+
+#         # fig, ax = plt.subplots()
+
+#         # im = ax.imshow(gaussian_resized, aspect="auto") 
+#         # cbar = fig.colorbar(im, ax=ax)             
+#         # cbar.set_label("Score")      
+
+#         # fig.savefig("./checkpoints/qwen25vl_warmup_base_v2p_variance/heatmap.png", dpi=300, bbox_inches="tight")
+
+#         # sys.exit(0)
+
+#         return gaussian.to(f"cuda:{torch.cuda.current_device()}")
+    
+#     # def leftpad_compact(self, input_ids: torch.Tensor,
+#     #                     attention_mask: torch.Tensor,
+#     #                     pad_token_id: int):
+#     #     """
+#     #     Move all padding to the LEFT by packing real tokens to the RIGHT.
+#     #     attention_mask: 1=real token, 0=pad
+#     #     input_ids, attention_mask: (B, L)
+#     #     """
+#     #     B, L = input_ids.shape
+#     #     device = input_ids.device
+
+#     #     lengths = attention_mask.sum(dim=1).long()              # (B,)
+#     #     start = (L - lengths).unsqueeze(1)                      # (B, 1)
+
+#     #     # 0..len-1 for real tokens; pads become -1
+#     #     token_pos = attention_mask.cumsum(dim=1).long() - 1     # (B, L)
+
+#     #     dst = start + token_pos                                 # (B, L)
+#     #     real = attention_mask.bool()
+
+#     #     # For pads, put a harmless index (0) + harmless value (pad_token)
+#     #     # dst = torch.where(real, dst, torch.zeros_like(dst))     # (B, L) long
+#     #     # src = torch.where(real, input_ids, torch.full_like(input_ids, pad_token_id))
+
+#     #     out_ids = torch.full((B, L), pad_token_id, device=device, dtype=input_ids.dtype)
+#     #     out_mask = torch.zeros((B, L), device=device, dtype=attention_mask.dtype)
+
+#     #     # scatter ONLY real tokens (no collisions)
+#     #     b_idx, t_idx = torch.where(real)                            # (N,)
+#     #     dst_idx = dst[b_idx, t_idx]                                 # (N,)
+#     #     out_ids[b_idx, dst_idx] = input_ids[b_idx, t_idx]
+#     #     out_mask[b_idx, dst_idx] = 1
+
+#     #     max_len = int(lengths.max().item())
+#     #     if max_len <= 0:
+#     #         return out_ids[:, :1], out_mask[:, :1]
+
+#     #     out_ids = out_ids[:, L - max_len :]
+#     #     out_mask = out_mask[:, L - max_len :]
+#     #     return out_ids, out_mask
+
+
+#     def _generate_and_score_completions(self, inputs: dict[str, Union[torch.Tensor, Any]], model) -> dict[str, Union[torch.Tensor, Any]]:
+#         # print("inputs " + str(inputs))
+#         device = self.accelerator.device
+#         prompts = [x["prompt"] for x in inputs]
+#         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+#         # Handle both pre-loaded images and image paths
+#         images = []
+#         gaussian_patches_list = []
+#         binary_mask_list = []
+#         bbox_list =[]
+#         patch_centers = []
+#         grid_values = []
+#         for x in inputs:
+#             if "image" in x:
+#                 img = x["image"]
+#             elif "image_path" in x and x["image_path"] is not None:
+#                 img = PIL.Image.open(x["image_path"])
+
+#             try:
+#                 # Ensure minimum dimensions of 28 pixels
+#                 w, h = img.size
+#                 if w < 28 or h < 28:
+#                     # Calculate new dimensions maintaining aspect ratio
+#                     if w < h:
+#                         new_w = 28
+#                         new_h = int(h * (28/w))
+#                     else:
+#                         new_h = 28
+#                         new_w = int(w * (28/h))
+#                     img = img.resize((new_w, new_h), PIL.Image.Resampling.LANCZOS)
+            
+#                 images.append(img)
+#             except:
+#                 pass
+
+#         if len(images) > 0:
+#             prompt_inputs = self.processing_class(
+#                 text=prompts_text,
+#                 images=images,
+#                 return_tensors="pt",
+#                 padding=True,
+#                 padding_side="left",
+#                 add_special_tokens=False,
+#             )
+#         else:
+#             prompt_inputs = self.processing_class(
+#                 text=prompts_text,
+#                 return_tensors="pt",
+#                 padding=True,
+#                 padding_side="left",
+#                 add_special_tokens=False,
+#             )
+#         prompt_inputs = super()._prepare_inputs(prompt_inputs)
+#         scales = []
+#         # resize output coordinate due to the image resize
+#         for i in range(len(images)):
+            
+#             origin_height = images[i].size[1]
+#             origin_width = images[i].size[0]
+
+#             # option 1
+#             # resized_height, resized_width = smart_resize(origin_height, origin_width, max_pixels=self.processing_class.image_processor.max_pixels)
+#             # option 2
+#             resized_height = prompt_inputs['image_grid_thw'][i][1] * self.processing_class.image_processor.patch_size
+#             resized_width = prompt_inputs['image_grid_thw'][i][2] * self.processing_class.image_processor.patch_size
+
+#             scale_x = origin_width / resized_width
+#             scale_y = origin_height / resized_height
+#             gaussian_patches = self.get_center_and_extremities(self.processing_class.image_processor,images[i],inputs[i]['bbox'], [1/scale_x,1/scale_y])
+#             binary_patches = self.get_multi_patch_labels(self.processing_class.image_processor,images[i],inputs[i]['bbox'], [1/scale_x,1/scale_y])
+#             patch_center = self.get_patch_centers(self.processing_class.image_processor,images[i], [1/scale_x,1/scale_y])
+#             # grid_value = self.get_grid_values(self.processing_class.image_processor,images[i], [1/scale_x,1/scale_y])
+#             # grid_values.append(grid_value)
+#             gaussian_patches_list.append(gaussian_patches)
+#             binary_mask_list.append(binary_patches)
+#             scales.append([1/scale_x,1/scale_y])
+#             bbox_list.append(inputs[i]['bbox'])
+#             patch_centers.append(patch_center)
+
+#         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+#         # prompt_inputs['patch_indexes'] = gaussian_patches_list
+#         # prompt_inputs['multi_patch_labels'] = binary_mask_list
+#         # prompt_inputs['patch_centers'] = patch_centers
+
+#         if len(images) > 0:
+#             pixel_values = prompt_inputs["pixel_values"]
+#             image_grid_thw = prompt_inputs["image_grid_thw"]
+#         else:
+#             pixel_values = None
+#             image_grid_thw = None
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         if self.max_prompt_length is not None:
+#             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+#             prompt_inputs["input_ids"] = prompt_ids
+#             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+#             prompt_inputs["attention_mask"] = prompt_mask
+
+#         # Generate completions
+#         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+#             # COMM
+#             # original_prompt_length = prompt_ids.size(1)
+#             # original_prompt_mask_length = prompt_mask.size(1)
+#             prompt_completion_ids = unwrapped_model.generate(
+#                 **prompt_inputs, 
+#                 generation_config=self.generation_config
+#             )
+
+#             # sub completino token with 
+#             # decoded_completion_ids = self.processing_class.batch_decode(prompt_completion_ids[:,original_prompt_length:], skip_special_tokens=False)
+#             # decoded_completion_ids_without_tokens = self.processing_class.batch_decode(prompt_completion_ids[:,original_prompt_length:], skip_special_tokens=True)
+
+#             # sub_completion_ids = [re.sub(r"\[\s*-?\d+\s*,\s*-?\d+\s*\]", "<|pointer_start|><|pointer_pad|><|pointer_end|>", x) for x in decoded_completion_ids]
+#             # prompt_completion_ids = self.processing_class.tokenizer(prompt_completion_ids, add_special_tokens=False,return_tensors="pt",
+#             #                                   padding=True,truncation=False)['input_ids']
+            
+#             # prompt_completion_ids = self.processing_class(
+#             #     text=prompt_completion_ids,
+#             #     return_tensors="pt",
+#             #     padding=True,
+#             #     padding_side="left",
+#             #     add_special_tokens=False,
+#             # )['input_ids'].to(f"cuda:{torch.cuda.current_device()}")
+
+#             # encoded_completion_ids = self.processing_class(
+#             # text=sub_completion_ids,
+#             # images=None,
+#             # return_tensors="pt",
+#             # padding=True,
+#             # padding_side="right",
+#             # add_special_tokens=False,)
+
+#             # encoded_completion_ids = super()._prepare_inputs(encoded_completion_ids)
+            
+#             # completion_ids = torch.cat((prompt_ids,encoded_completion_ids['input_ids']), dim = 1)
+#             # prompt_mask = torch.cat((prompt_mask,encoded_completion_ids['attention_mask']), dim = 1)
+#             # print("non mod prompt inputs " + str(prompt_inputs))
+#             # print("completion ids " + str(prompt_completion_ids))
+#             # start_end_bool = ((prompt_completion_ids == self.model.config.pointer_start_token_id) | (prompt_completion_ids == self.model.config.pointer_end_token_id))
+#             # start_end_bool = (prompt_completion_ids == self.model.config.pointer_pad_token_id)
+
+#             # start_end_bool_indices = torch.nonzero(start_end_bool, as_tuple=False).squeeze(-1)
+#             # print("start end indices " + str(start_end_bool_indices))
+#             # assert start_end_bool_indices.numel() == 2
+#             # assert start_end_bool_indices.numel() == 1
+
+#             # prompt_completion_ids = torch.cat((prompt_completion_ids[:start_end_bool_indices[0]],
+#             #                                    torch.Tensor([self.model.config.pointer_pad_token_id]).to(f"cuda:{torch.cuda.current_device()}"),
+#             #                                    prompt_completion_ids[start_end_bool_indices[1]+1:]),
+#             #                                    dim=1)
+
+#             # pad_id = self.processing_class.tokenizer.pad_token_id
+#             # completion_ids, prompt_mask = self.leftpad_compact(completion_ids, prompt_mask, pad_id)
+
+#             # prompt_inputs['input_ids'] = completion_ids
+#             # prompt_inputs["attention_mask"] = prompt_mask
+#             # print("mod prompt inputs " + str(prompt_inputs))
+#             # with torch.no_grad():
+#             #     instantaneous_output = unwrapped_model(**prompt_inputs)
+#             # COMM
+#             prompt_length = prompt_ids.size(1)
+#             prompt_ids = prompt_completion_ids[:, :prompt_length]
+#             completion_ids = prompt_completion_ids[:, prompt_length:]
+            
+#             # No need to repeat prompt_mask as we're not duplicating prompts during generation
+        
+#         # with unwrap_model_for_generation(self.ref_model, self.accelerator) as unwrapped_model:
+#         #     # COMM
+#         #     # prompt_completion_ids = unwrapped_model.generate(
+#         #     #     **prompt_inputs, 
+#         #     #     generation_config=self.generation_config
+#         #     # )
+#         #     with torch.no_grad():
+#         #         ref_instantaneous_output = unwrapped_model(**prompt_inputs)
+#             # COMM
+#             # prompt_length = prompt_ids.size(1)
+#             # prompt_ids = prompt_completion_ids[:, :prompt_length]
+#             # completion_ids = prompt_completion_ids[:, prompt_length:]
+#             # No need to repeat prompt_mask as we're not duplicating prompts during generation
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Mask everything after the first EOS token
+#         # COMM
+#         is_eos = completion_ids == self.processing_class.eos_token_id
+#         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+#         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+#         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+#         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+#         # Concatenate prompt_mask with completion_mask for logit computation
+#         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+
+#         try:
+#             pixel_values = prompt_inputs["pixel_values"]
+#             image_grid_thw = prompt_inputs["image_grid_thw"]
+#         except:
+            
+#             pixel_values = None
+#             image_grid_thw = None
+#         with torch.no_grad():
+#             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip its
+#             # computation here, and use per_token_logps.detach() instead.
+#             # print("num iterations count" + str(self.num_iterations))
+#             if self.num_iterations > 1:
+#                 old_per_token_logps = self._get_per_token_logps(
+#                     model, prompt_completion_ids, attention_mask, pixel_values, image_grid_thw
+#                 )
+#                 old_per_token_logps = old_per_token_logps[:, prompt_length - 1:]
+#                 # old_attention = instantaneous_output['attention_pattern']
+#             else:
+#                 old_per_token_logps = None
+#                 # old_attention = None
+
+#             if self.beta == 0.0:
+#                 ref_per_token_logps = None
+#                 # ref_attention = None
+#             elif self.ref_model is not None:
+#                 ref_per_token_logps = self._get_per_token_logps(
+#                     self.ref_model, prompt_completion_ids, attention_mask, pixel_values, image_grid_thw
+#                 )
+#                 # ref_attention = ref_instantaneous_output['attention_pattern']
+#             else:
+#                 # HERE
+#                 with self.accelerator.unwrap_model(model).disable_adapter():
+#                     ref_per_token_logps = self._get_per_token_logps(
+#                         model, prompt_completion_ids, attention_mask, pixel_values, image_grid_thw
+#                     )
+#                     # mod_output = model(**prompt_inputs)
+#                     # ref_attention = mod_output['attention_pattern']
+#         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1:]
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Decode the generated completions
+#         # COMM
+#         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+#         local_coord = torch.Tensor([self.extract_coord_func(x)[0] for x in completions])
+#         local_coord = local_coord.to(f"cuda:{torch.cuda.current_device()}")
+#         coordinates = self.accelerator.gather(local_coord)
+
+#         # image_related_data = {'images':images, "prompt inputs":prompt_inputs, "patch size": self.processing_class.image_processor.patch_size,
+#         # "merge size":self.processing_class.image_processor.merge_size}
+         
+#         if is_conversational(inputs[0]):
+#             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+
+#         # Compute the rewards
+#         # No need to duplicate prompts as we're not generating multiple completions per prompt
+#         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+#         for i, (reward_func, reward_processing_class) in enumerate(
+#             zip(self.reward_funcs, self.reward_processing_classes)
+#         ):
+#             if isinstance(reward_func, PreTrainedModel):
+#                 # pass
+#                 if is_conversational(inputs[0]):
+#                     messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+#                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+#                 else:
+#                     texts = [p + c for p, c in zip(prompts, completions)]
+#                 reward_inputs = reward_processing_class(
+#                     texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+#                 )
+#                 reward_inputs = super()._prepare_inputs(reward_inputs)
+#                 with torch.inference_mode():
+#                     rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+#             else:
+#                 # Repeat all input columns (but "prompt" and "completion") to match the number of generations
+#                 reward_kwargs = {key: [] for key in inputs[0].keys() if key not in ["prompt", "completion"]}
+#                 for key in reward_kwargs:
+#                     for example in inputs:
+#                         # No need to duplicate prompts as we're not generating multiple completions per prompt
+#                         # reward_kwargs[key].extend([example[key]] * self.num_generations)
+#                         reward_kwargs[key].extend([example[key]])
+#                 # output_reward_func = reward_func(prompts=prompts,  scales = scales, completions = completions,
+#                 #                                  attn_scores = instantaneous_output['attention_pattern'],ground_truth_mask=binary_mask_list,image=images,
+#                 #                                  gaussian_truth=gaussian_patches_list,image_processor = self.processing_class.image_processor, bboxes = bbox_list,
+#                 #                                  completions_only = decoded_completion_ids_without_tokens,grid_values = grid_values,
+#                 #                                   **reward_kwargs)
+#                 output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, generations=coordinates, 
+#                                     ground_truth_mask=binary_mask_list, gaussian_truth=gaussian_patches_list, **reward_kwargs)
+#                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+#         # Gather rewards across processes
+#         rewards_per_func = self.accelerator.gather(rewards_per_func)
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+        
+#         # Sum the rewards from all reward functions
+#         rewards = rewards_per_func.sum(dim=1)
+#         completion_token_length = torch.tensor(
+#             [completion_ids[i].size(0) for i in range(len(completion_ids))], device=device
+#         )
+#         # Gather and group the completion token length across processes
+#         completion_token_length = self.accelerator.gather(completion_token_length)
+#         rewards = self._add_completion_length_to_rewards(
+#             rewards, completion_token_length
+#         )
+#         # Compute grouped-wise rewards
+#         # Each group consists of num_generations completions for the same prompt
+#         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+#         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        
+#         # Normalize the rewards to compute the advantages
+#         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+#         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+#         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+        
+#         # Get only the local slice of advantages
+#         process_slice = slice(
+#             self.accelerator.process_index * len(prompts),
+#             (self.accelerator.process_index + 1) * len(prompts),
+#         )
+#         advantages = advantages[process_slice]
+
+#         # Log the metrics
+#         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
+#         # self._metrics["completion_length"].append(completion_length)
+        
+#         reward_per_func = self.accelerator.gather_for_metrics(rewards_per_func).mean(0)
+
+#         for i, reward_func in enumerate(self.reward_funcs):
+#             if isinstance(reward_func, PreTrainedModel):
+#                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
+#             else:
+#                 reward_func_name = reward_func.__name__
+#             self._metrics[f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+
+#         self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
+
+#         self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards).mean().item())
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         return {
+#             "prompt_ids": prompt_ids,
+#             "prompt_mask": prompt_mask,
+#             "completion_ids": completion_ids,
+#             "completion_mask": completion_mask,
+#             "old_per_token_logps": old_per_token_logps,
+#             "ref_per_token_logps": ref_per_token_logps,
+#             "advantages": advantages,
+#             "pixel_values": pixel_values,
+#             "image_grid_thw": image_grid_thw
+#         }
+    
+#         # return {
+#         #     "prompt_ids": prompt_ids,
+#         #     "prompt_mask": prompt_mask,
+#         #     "old_attention": torch.stack(old_attention) if old_attention is not None else None,
+#         #     "ref_attention": torch.stack(ref_attention) if ref_attention is not None else None,
+#         #     "advantages": advantages,
+#         #     "pixel_values": pixel_values,
+#         #     "image_grid_thw": image_grid_thw,
+#         #     "prompt_inputs":prompt_inputs
+#         # }
+
+#     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+#         if return_outputs:
+#             raise ValueError("The GRPOTrainer does not support returning outputs")
+    
+#         # Check if we need to generate new completions or use buffered ones
+#         if self.state.global_step % self.num_iterations == 0:
+#             inputs = self._generate_and_score_completions(inputs, model)
+#             self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
+#         else:
+#             inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+#         self._step += 1
+
+#         # Get the prepared inputs
+#         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+#         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+#         pixel_values = inputs["pixel_values"]
+#         image_grid_thw = inputs["image_grid_thw"]
+        
+#         # Concatenate for full sequence
+#         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+#         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Get the current policy's log probabilities
+#         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, pixel_values, image_grid_thw)
+#         # attention_probs = model(**inputs['prompt_inputs'])
+#         # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
+#         per_token_logps = per_token_logps[:, prompt_ids.size(1) - 1:]
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         # Get the advantages from inputs
+#         advantages = inputs["advantages"]
+
+#         # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip its computation
+#         # and use per_token_logps.detach() instead
+#         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+#         print('iterations ' + str(self.num_iterations))
+#         # old_attention_probs = inputs['old_attention'] if self.num_iterations > 1 else torch.stack(attention_probs['attention_pattern']).detach()
+#         # Compute the policy ratio and clipped version
+#         # coef_1 = torch.exp(torch.stack(attention_probs['attention_pattern']) - old_attention_probs)
+#         # print(coef_1)
+#         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+#         coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+#         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+#         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+#         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+
+#         # Add KL penalty if beta > 0
+#         if self.beta > 0:
+#             ref_per_token_logps = inputs["ref_per_token_logps"]
+#             per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+#             per_token_loss = per_token_loss + self.beta * per_token_kl
+#             # ref_attention = inputs["ref_attention"]
+#             # attention_kl = torch.exp(ref_attention - torch.stack(attention_probs['attention_pattern'])) - (ref_attention - torch.stack(attention_probs['attention_pattern'])) - 1
+#             # per_token_loss = per_token_loss + self.beta * attention_kl
+
+#             # Log KL divergence
+#             # mean_kl = attention_kl.sum(dim=1).mean()
+#             mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+
+#             self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
+#         # Compute final loss
+#         # loss = per_token_loss.sum(dim=1).mean()
+#         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+
+        
+#         # Log clip ratio
+#         is_clipped = (per_token_loss1 < per_token_loss2).float()
+#         clip_ratio = is_clipped.mean()
+#         # clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
+#         self._metrics["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+
+#         self._metrics['ram'].append(log_memory()['ram'])
+#         self._metrics['vram'].append(log_memory()['vram'])
+
+#         self._metrics['loss'].append(loss.item())
+
+#         # print("loss0:", loss)
+#         return loss
+
+#     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+#         if len(self._metrics['ram']) != 0:
+#             self._metrics['ram'] = [max(self._metrics['ram'])]
+#             self._metrics['vram'] = [max(self._metrics['vram'])]
+#         else:
+#             self._metrics['ram'] = [0]
+#             self._metrics['vram'] = [0]
+#         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+#         logs = {**logs, **metrics}
+#         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+#             super().log(logs, start_time)
+#         else:  # transformers<=4.46
+#             super().log(logs)
+#         if dist.get_rank() == 0:
+#             self.experiment.log_metrics(metrics,step=self.step)
+#         self._metrics.clear()
+#         self.step += 1
+
+#     def create_model_card(
+#         self,
+#         model_name: Optional[str] = None,
+#         dataset_name: Optional[str] = None,
+#         tags: Union[str, list[str], None] = None,
+#     ):
+#         """
+#         Creates a draft of a model card using the information available to the `Trainer`.
+
+#         Args:
+#             model_name (`str` or `None`, *optional*, defaults to `None`):
+#                 Name of the model.
+#             dataset_name (`str` or `None`, *optional*, defaults to `None`):
+#                 Name of the dataset used for training.
+#             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+#                 Tags to be associated with the model card.
+#         """
+#         if not self.is_world_process_zero():
+#             return
+
+#         if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+#             base_model = self.model.config._name_or_path
+#         else:
+#             base_model = None
+
+#         tags = tags or []
+#         if isinstance(tags, str):
+#             tags = [tags]
+
+#         if hasattr(self.model.config, "unsloth_version"):
+#             tags.append("unsloth")
+
+#         citation = textwrap.dedent(
+#             """\
+#             @article{zhihong2024deepseekmath,
+#                 title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
+#                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+#                 year         = 2024,
+#                 eprint       = {arXiv:2402.03300},
+#             """
+#         )
+
+#         model_card = generate_model_card(
+#             base_model=base_model,
+#             model_name=model_name,
+#             hub_model_id=self.hub_model_id,
+#             dataset_name=dataset_name,
+#             tags=tags,
+#             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+#             comet_url=get_comet_experiment_url(),
+#             trainer_name="GRPO",
+#             trainer_citation=citation,
+#             paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
+#             paper_id="2402.03300",
+#         )
+
+#         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+#     def _get_train_sampler(self) -> Sampler:
+#         """Returns a sampler that ensures proper data sampling for GRPO training."""
+#         effective_batch_size = (
+#             self.args.per_device_train_batch_size
+#             * self.accelerator.num_processes
+#             * self.args.gradient_accumulation_steps
+#         )
+        
+#         return RepeatRandomSampler(
+#             data_source=self.train_dataset,
+#             mini_repeat_count=self.num_generations,
+#             batch_size=effective_batch_size // self.num_generations,
+#             repeat_count=self.num_iterations,
+#             seed=self.args.seed,
+#         )
+
+#     def _get_eval_sampler(self, eval_dataset) -> Sampler:
+#         """Returns a sampler for evaluation."""
+#         return RepeatRandomSampler(
+#             data_source=eval_dataset,
+#             mini_repeat_count=self.num_generations,
+#             seed=self.args.seed,
+#         )
+
 # Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +1512,7 @@ import textwrap
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union, Sized
 import sys
-import re
+
 import torch
 import torch.utils.data
 import transformers
@@ -41,19 +1536,18 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
-
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from trl.models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url
-from ..qwen25_attention import Qwen2_5_VLForConditionalGenerationWithAttention
+import torch.distributed as dist
 from accelerate.utils import is_peft_model, set_seed
 import PIL.Image
-import numpy as np
+
 import copy
 from torch.utils.data import Sampler
 import warnings
-from .. import qwen25_attention
+
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
@@ -61,19 +1555,14 @@ if is_wandb_available():
     import wandb
 
 import comet_ml
+from dotenv import load_dotenv
 import psutil
+import inspect
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-def log_memory():
-    gb = 1024 ** 3
-    dev = torch.cuda.current_device()
-    mem = torch.cuda.memory_allocated(f"cuda:{dev}")/gb
-    vm = psutil.virtual_memory()
-    used_gb   = vm.used / 1e9  
-    return {'vram':mem,'ram':used_gb}
 
 import math
 def smart_resize(
@@ -260,66 +1749,18 @@ class Qwen2VLGRPOTrainer(Trainer):
         min_pixels: Optional[int] = 3136,
         attn_implementation: str = "flash_attention_2",
         torch_dtype: str = "bfloat16",
-        experiment: comet_ml.start = None,
-        extract_coord_func : str = None,
-        attention_model : torch.nn = None
+        extract_coord_func : str = None
     ):
-        def smart_tokenizer_and_embedding_resize(
-            tokenizer: transformers.PreTrainedTokenizer,
-            model: transformers.PreTrainedModel,
-            ref_model : transformers.PreTrainedModel
-        ):
-            """Resize tokenizer and embedding.
-
-            Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
-            """
-            num_new_tokens = tokenizer.add_special_tokens( {'additional_special_tokens':["<coord>","</coord>"]})
-            model.resize_token_embeddings(len(tokenizer))
-            ref_model.resize_token_embeddings(len(tokenizer))
-
-
-            new_vocab_size = len(tokenizer)    
-            # Update base model and current model config
-            if hasattr(model.config, "text_config"):
-                model.config.text_config.vocab_size = new_vocab_size
-            else:
-                model.config.vocab_size = new_vocab_size
-            model.vocab_size = new_vocab_size
-
-            if hasattr(ref_model.config, "text_config"):
-                ref_model.config.text_config.vocab_size = new_vocab_size
-            else:
-                ref_model.config.vocab_size = new_vocab_size
-            ref_model.vocab_size = new_vocab_size
-
-            for mod in [model, ref_model]:
-                if num_new_tokens > 0:
-                    input_embeddings = mod.get_input_embeddings().weight.data
-                    output_embeddings = mod.get_output_embeddings().weight.data
-
-                    input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-                    output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-
-                    input_embeddings[-num_new_tokens:] = input_embeddings_avg
-                    output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
-
-        def update_pointer_token_ids(model_config: transformers.PretrainedConfig,ref_model_config: transformers.PretrainedConfig, tokenizer: transformers.PreTrainedTokenizer):
-            DEFAULT_POINTER_START_TOKEN = "<coord>"
-            DEFAULT_POINTER_END_TOKEN = "</coord>"
-            model_config.pointer_start_token_id = tokenizer.encode(DEFAULT_POINTER_START_TOKEN)[0]
-            model_config.pointer_end_token_id = tokenizer.encode(DEFAULT_POINTER_END_TOKEN)[0]
-            ref_model_config.pointer_start_token_id = tokenizer.encode(DEFAULT_POINTER_START_TOKEN)[0]
-            ref_model_config.pointer_end_token_id = tokenizer.encode(DEFAULT_POINTER_END_TOKEN)[0]
-
-        # Initialize the metrics
-        self._metrics = defaultdict(list)
-        self.experiment = experiment
         self.step = 0
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
         self.extract_coord_func = extract_coord_func
-        self.attention_model = attention_model
+
+        if dist.get_rank() == 0:
+            load_dotenv()
+            os.getenv('COMET_API_KEY')
+            env_key = os.getenv('DAST_EXP_NAME')
+            experiment_config = comet_ml.ExperimentConfig(name=env_key)
+            self.experiment = comet_ml.start(project_name="ui-r1-attention", experiment_config=experiment_config)
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -349,15 +1790,13 @@ class Qwen2VLGRPOTrainer(Trainer):
             model_init_kwargs["use_cache"] = (
                 False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
-            if "Qwen2-VL" in model_id and "Attention" not in model_id:
+            if "Qwen2-VL" in model_id:
                 model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id and "Attention" not in model_id:
+            elif "Qwen2.5-VL" in model_id:
                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Aria" in model_id and "Attention" not in model_id:
+            elif "Aria" in model_id:
                 model_init_kwargs.pop("use_cache")
                 model = AriaForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id and "Attention" in model_id:
-                model = Qwen2_5_VLForConditionalGenerationWithAttention.from_pretrained(model, **model_init_kwargs)
             else:
                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
@@ -367,9 +1806,8 @@ class Qwen2VLGRPOTrainer(Trainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
+            
         
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
 
         self.vision_modules_keywords = ["visual"]
         if peft_config is not None:
@@ -390,9 +1828,6 @@ class Qwen2VLGRPOTrainer(Trainer):
             peft_config.target_modules = target_modules
             model = get_peft_model(model, peft_config)
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
-
         if freeze_vision_modules:
             print("Freezing vision modules...")
             for n, p in model.named_parameters():
@@ -405,14 +1840,12 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         # Reference model
         if is_deepspeed_zero3_enabled():
-            if "Qwen2-VL" in model_id and "Attention" not in model_id:
+            if "Qwen2-VL" in model_id:
                 self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id and "Attention" not in model_id:
+            elif "Qwen2.5-VL" in model_id:
                 self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
-            elif "Aria" in model_id and "Attention" not in model_id:
+            elif "Aria" in model_id:
                 self.ref_model = AriaForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id and "Attention" in model_id:
-                self.ref_model = Qwen2_5_VLForConditionalGenerationWithAttention.from_pretrained(model_id, **model_init_kwargs)
             else:
                 self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif peft_config is None:
@@ -423,9 +1856,6 @@ class Qwen2VLGRPOTrainer(Trainer):
             # to revert to the initial model.
             self.ref_model = None
         
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
-
         # Processing class
         if processing_class is None:
             if "Qwen2-VL" in model_id or "Qwen2.5-VL" in model_id or "Aria" in model_id:
@@ -439,12 +1869,6 @@ class Qwen2VLGRPOTrainer(Trainer):
             else:
                 processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
                 pad_token_id = processing_class.pad_token_id
-
-        smart_tokenizer_and_embedding_resize(processing_class.tokenizer,model, self.ref_model)
-        update_pointer_token_ids(model.config,self.ref_model.config, processing_class.tokenizer)
-
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -477,8 +1901,7 @@ class Qwen2VLGRPOTrainer(Trainer):
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
 
         # Data collator
         def data_collator(features):  # No data collation is needed in GRPO
@@ -517,6 +1940,9 @@ class Qwen2VLGRPOTrainer(Trainer):
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
+
+        # Initialize the metrics
+        self._metrics = defaultdict(list)
 
         super().__init__(
             model=model,
@@ -682,7 +2108,9 @@ class Qwen2VLGRPOTrainer(Trainer):
         )
 
         return (rewards + add_rewards).view(-1)
-    
+
+
+
 
     def _generate_and_score_completions(self, inputs: dict[str, Union[torch.Tensor, Any]], model) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
@@ -755,8 +2183,7 @@ class Qwen2VLGRPOTrainer(Trainer):
             pixel_values = None
             image_grid_thw = None
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
 
         # if self.max_prompt_length is not None:
         #     prompt_ids = prompt_ids[:, -self.max_prompt_length :]
@@ -770,16 +2197,13 @@ class Qwen2VLGRPOTrainer(Trainer):
                 **prompt_inputs, 
                 generation_config=self.generation_config
             )
-            with torch.no_grad():
-                instantaneous_output = unwrapped_model(**prompt_inputs)
 
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
             # No need to repeat prompt_mask as we're not duplicating prompts during generation
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
@@ -791,8 +2215,7 @@ class Qwen2VLGRPOTrainer(Trainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
 
         try:
             pixel_values = prompt_inputs["pixel_values"]
@@ -825,20 +2248,15 @@ class Qwen2VLGRPOTrainer(Trainer):
                     )
         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1:]
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
-
-        # Decode the generated completions
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         local_coord = torch.Tensor([self.extract_coord_func(x)[0] for x in completions])
         local_coord = local_coord.to(f"cuda:{torch.cuda.current_device()}")
         coordinates = self.accelerator.gather(local_coord)
 
-        image_related_data = {'images':images, "prompt inputs":prompt_inputs, "patch size": self.processing_class.image_processor.patch_size,
-        "merge size":self.processing_class.image_processor.merge_size}
-         
+        # Decode the generated completions
         if is_conversational(inputs[0]):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+
 
         # Compute the rewards
         # No need to duplicate prompts as we're not generating multiple completions per prompt
@@ -867,16 +2285,12 @@ class Qwen2VLGRPOTrainer(Trainer):
                         # No need to duplicate prompts as we're not generating multiple completions per prompt
                         # reward_kwargs[key].extend([example[key]] * self.num_generations)
                         reward_kwargs[key].extend([example[key]])
-                output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, generations=coordinates, 
-                                                 attention_model = self.attention_model,qwen_model_output = instantaneous_output,
-                                                  image_data = image_related_data, **reward_kwargs)
+                # output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, **reward_kwargs)
+                output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, generations=coordinates, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
         # Gather rewards across processes
         rewards_per_func = self.accelerator.gather(rewards_per_func)
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
-        
         # Sum the rewards from all reward functions
         rewards = rewards_per_func.sum(dim=1)
         completion_token_length = torch.tensor(
@@ -897,8 +2311,7 @@ class Qwen2VLGRPOTrainer(Trainer):
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
         
         # Get only the local slice of advantages
         process_slice = slice(
@@ -923,9 +2336,6 @@ class Qwen2VLGRPOTrainer(Trainer):
         self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
 
         self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards).mean().item())
-
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
 
         return {
             "prompt_ids": prompt_ids,
@@ -961,16 +2371,14 @@ class Qwen2VLGRPOTrainer(Trainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
 
         # Get the current policy's log probabilities
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, pixel_values, image_grid_thw)
         # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
         per_token_logps = per_token_logps[:, prompt_ids.size(1) - 1:]
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
+        
 
         # Get the advantages from inputs
         advantages = inputs["advantages"]
@@ -1004,14 +2412,8 @@ class Qwen2VLGRPOTrainer(Trainer):
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
 
-        self._metrics['ram'].append(log_memory()['ram'])
-        self._metrics['vram'].append(log_memory()['vram'])
-
-        self._metrics['loss'].append(loss.item())
-
-        # print("loss0:", loss)
         return loss
-
+    
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         if len(self._metrics['ram']) != 0:
             self._metrics['ram'] = [max(self._metrics['ram'])]
@@ -1025,7 +2427,8 @@ class Qwen2VLGRPOTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self.experiment.log_metrics(metrics,step=self.step)
+        if dist.get_rank() == 0:
+            self.experiment.log_metrics(metrics,step=self.step)
         self._metrics.clear()
         self.step += 1
 

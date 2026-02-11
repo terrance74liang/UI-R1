@@ -29,7 +29,7 @@ def extract_coord(content):
             coord = [int(coord_match.group(1)), int(coord_match.group(2))]
             x, y = coord
             return coord, True
-    return [0, 0, 0, 0], False
+    return [0, 0], False
 
 
 logger = logging.getLogger(__name__)
