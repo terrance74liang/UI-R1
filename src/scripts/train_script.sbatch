@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --gpus=nvidia_h100_80gb_hbm3_3g.40gb:2
 #SBATCH --mem=200GB
-#SBATCH --time=14:00:00
+#SBATCH --time=7:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
 module load python/3.11.5 gcc opencv/4.10.0 arrow/21.0.0 cuda/12.6

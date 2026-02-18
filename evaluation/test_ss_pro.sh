@@ -1,4 +1,4 @@
-MODEL_PATH="/home/teliang/scratch/UI-R1/ckpt/Gaussian_pnp_Qwen2.5"
+MODEL_PATH="/home/teliang/scratch/UI-R1/ckpt/Gaussian_mass_Qwen2.5"
 SS_PATH="/home/teliang/scratch/screenspot_pro"
 TASK_NAME="all"
 TEST_NAME="ScreenSpot-pro-"${TASK_NAME}

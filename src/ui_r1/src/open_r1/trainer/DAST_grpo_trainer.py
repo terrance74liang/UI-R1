@@ -2160,6 +2160,7 @@ class Qwen2VLGRPOTrainer(Trainer):
             )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         scales = []
+        # patch_merge_size = [self.processing_class.image_processor.patch_size, self.processing_class.image_processor.merge_size]
         # resize output coordinate due to the image resize
         for i in range(len(images)):
             
@@ -2174,6 +2175,7 @@ class Qwen2VLGRPOTrainer(Trainer):
 
             scale_x = origin_width / resized_width
             scale_y = origin_height / resized_height
+
             scales.append([scale_x,scale_y])
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         if len(images) > 0:
@@ -2249,9 +2251,9 @@ class Qwen2VLGRPOTrainer(Trainer):
         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1:]
 
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        local_coord = torch.Tensor([self.extract_coord_func(x)[0] for x in completions])
-        local_coord = local_coord.to(f"cuda:{torch.cuda.current_device()}")
-        coordinates = self.accelerator.gather(local_coord)
+        # local_coord = torch.Tensor([self.extract_coord_func(x)[0] for x in completions])
+        # local_coord = local_coord.to(f"cuda:{torch.cuda.current_device()}")
+        # coordinates = self.accelerator.gather(local_coord)
 
         # Decode the generated completions
         if is_conversational(inputs[0]):
@@ -2286,7 +2288,7 @@ class Qwen2VLGRPOTrainer(Trainer):
                         # reward_kwargs[key].extend([example[key]] * self.num_generations)
                         reward_kwargs[key].extend([example[key]])
                 # output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, **reward_kwargs)
-                output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales, generations=coordinates, **reward_kwargs)
+                output_reward_func = reward_func(prompts=prompts, completions=completions, scales = scales,step =self.state.global_step, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
         # Gather rewards across processes
         rewards_per_func = self.accelerator.gather(rewards_per_func)

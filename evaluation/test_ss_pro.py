@@ -17,37 +17,59 @@ logger.setLevel(logging.INFO)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 rank = 0
 
-def extract_coord(content):
-    # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
-    answer_tag_pattern = r'<answer>(.*?)</answer>'
-    bbox_pattern = r'\{.*\[(\d+),\s*(\d+)]\s*.*\}'
+def extract_mean_variance(content):
+    # Extract mean + variance from inside <answer>...</answer>.
+    # Expected format (order can vary):
+    # <answer>[{'action':'click','mean':[mx,my],'variance':[vx,vy]}]</answer>
+    # Returns: (mean, variance, ok)
+
+    answer_tag_pattern = r"<answer>(.*?)</answer>"
     content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
-    if content_answer_match:
-        content_answer = content_answer_match.group(1).strip()
-        coord_match = re.search(bbox_pattern, content_answer)
-        if coord_match:
-            coord = [int(coord_match.group(1)), int(coord_match.group(2))]
-            x, y = coord
-            return coord, True
-    return [0, 0], False
+    if not content_answer_match:
+        return [0, 0], [0.0, 0.0], False
+
+    content_answer = content_answer_match.group(1).strip()
+
+    # Ensure it's a click (optional but matches your "if its a click" requirement)
+    if not re.search(r"['\"]action['\"]\s*:\s*['\"]click['\"]", content_answer):
+        return [0, 0], [0.0, 0.0], False
+
+    # mean: [int, int]
+    mean_pattern = r"['\"]mean['\"]\s*:\s*\[\s*(-?\d+)\s*,\s*(-?\d+)\s*\]"
+    mean_match = re.search(mean_pattern, content_answer)
+    if not mean_match:
+        return [0, 0], [0.0, 0.0], False
+
+    mean = [int(mean_match.group(1)), int(mean_match.group(2))]
+
+    # variance: [num, num]  (accept ints or floats)
+    num = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+    var_pattern = rf"['\"]variance['\"]\s*:\s*\[\s*({num})\s*,\s*({num})\s*\]"
+    var_match = re.search(var_pattern, content_answer)
+    if not var_match:
+        return [0, 0], [0.0, 0.0], False
+
+    variance = [float(var_match.group(1)), float(var_match.group(2))]
+
+    return mean, variance, True
 
 
 logger = logging.getLogger(__name__)
 
-def run(rank, world_size, args):
+def run(rank, world_size, args, gpu = 'cpu'):
     if "Qwen2.5" in args.model_path:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             args.model_path,
             torch_dtype=torch.bfloat16,
             attn_implementation="flash_attention_2",
-            device_map="cpu",
+            device_map='cpu',
         )
     else:
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             args.model_path,
             torch_dtype=torch.bfloat16,
             attn_implementation="flash_attention_2",
-            device_map="cpu",
+            device_map= 'cpu',
         )
     if args.ori_processor_path is None:
         ori_processor_path = args.model_path
@@ -70,7 +92,12 @@ def run(rank, world_size, args):
                     processed_image_paths.append(match.group(1))
 
     processor = AutoProcessor.from_pretrained(ori_processor_path) 
-    model = model.to(torch.device(rank))
+
+    if gpu == "cpu":
+        model = model.to(torch.device(rank))
+    else:
+        model = model.to("cuda:0")
+        
     model = model.eval()
     
     error_count = 0
@@ -96,13 +123,23 @@ def run(rank, world_size, args):
             task_prompt = item["instruction"]
 
             question_template = (
-                f"In this UI screenshot, I want to perform the command '{task_prompt}'.\n"
-                f"Please provide the action to perform (enumerate in 'click' and 'scroll') and the coordinate where the cursor is moved to(integer) if click is performed.\n"
-                "Output the thinking process in <think> </think> and final answer in <answer> </answer> tags."
-                "The output answer format should be as follows:\n"
-                "<think> ... </think> <answer>[{'action': enum['click','scroll'], 'coordinate': [x, y]}]</answer>\n"
-                "Please strictly follow the format."
-            )
+                    f"In this UI screenshot, I want to perform the command '{task_prompt}'.\n"
+                    "Instead of predicting a single coordinate, predict a 2D probability distribution over the screen.\n"
+                    "The distribution should be a Gaussian defined by:\n"
+                    "- mean_x (integer)\n"
+                    "- mean_y (integer)\n"
+                    "- var_x (positive float)\n"
+                    "- var_y (positive float)\n\n"
+                    "Please output the reasoning in <think> </think> tags and the final result in <answer> </answer> tags.\n"
+                    "The output format must be exactly:\n"
+                    "<think> ... </think>\n"
+                    "<answer>[{'action': 'click', 'mean': [mean_x, mean_y], 'variance': [var_x, var_y]}]</answer>\n\n"
+                    "Constraints:\n"
+                    "- mean_x and mean_y must be valid screen coordinates\n"
+                    "- var_x and var_y must be > 0\n"
+                    "- Do not include any additional text outside the specified tags\n"
+                    "- Strictly follow the output format"
+                )
             # w/o thinking
             # question_template = (
             #     f"In this UI screenshot, I want to perform the command '{task_prompt}'.\n"
@@ -153,7 +190,7 @@ def run(rank, world_size, args):
                 response = response[0]
                 
                 gt_bbox = item["bbox"]
-                pred_coord, _ = extract_coord(response)
+                pred_coord, *_ = extract_mean_variance(response)
                 pred_coord = [int(pred_coord[0] * scale_x), int(pred_coord[1] * scale_y)]
 
                 success = gt_bbox[0] <= pred_coord[0] <= gt_bbox[2] and gt_bbox[1] <= pred_coord[1] <= gt_bbox[3]
@@ -181,11 +218,11 @@ def run(rank, world_size, args):
     return [error_count, correct_count, pred_results]
 
 def main(args):
-    multiprocess = torch.cuda.device_count() >= 2
+    multiprocess = torch.cuda.device_count() 
     mp.set_start_method('spawn')
     print(torch.cuda.device_count())
     
-    if multiprocess:
+    if multiprocess >= 2:
         logger.info('Started generation')
         n_gpus = torch.cuda.device_count()
         world_size = n_gpus
@@ -202,6 +239,23 @@ def main(args):
             global_count_error += int(result_lists[i][0])
             global_count_correct += int(result_lists[i][1])
             global_results.extend(result_lists[i][2])
+
+        logger.info(f'Error number: {global_count_error}')  
+        
+        logger.info('Finished running')
+    elif multiprocess == 1:
+        logger.info('Started generation')
+        n_gpus = torch.cuda.device_count()
+        world_size = n_gpus
+
+
+        func = run(rank = 0,world_size=world_size,gpu = "cuda:0", args=args)
+
+        global_count_error = 0
+        global_count_correct = 0
+        global_results = []
+
+        global_count_error, global_count_correct, global_results = func
 
         logger.info(f'Error number: {global_count_error}')  
         
