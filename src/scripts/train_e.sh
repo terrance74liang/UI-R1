@@ -1,7 +1,7 @@
 export DEBUG_MODE="true"
 export DATA_PATH=../../data/train_imgs
 export CKPT_PATH=../../Qwen2.5-VL-3B-Instruct
-export SAVE_PATH=../../ckpt/Gaussian_pnp
+export SAVE_PATH=../../ckpt/Gaussian_pnp_box_Qwen2.5
 export LOG_PATH=${SAVE_PATH}"/debug_log.txt"
 export Train_PATH=${SAVE_PATH}"/train.log"
 mkdir -p $SAVE_PATH

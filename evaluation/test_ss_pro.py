@@ -17,6 +17,18 @@ logger.setLevel(logging.INFO)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 rank = 0
 
+def extract_bbox(response):
+    answer_tag_pattern = r'<answer>(.*?)</answer>'
+    bbox_pattern = r'\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)]'
+    content_answer_match = re.search(answer_tag_pattern, response, re.DOTALL)
+    if content_answer_match:
+        content_answer = content_answer_match.group(1).strip()
+        coord_match = re.search(bbox_pattern, content_answer)
+        if coord_match:
+            coord = [int(coord_match.group(1)), int(coord_match.group(2)), int(coord_match.group(3)), int(coord_match.group(4))]
+            return coord, True
+    return [0, 0, 0, 0] , False
+
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
     answer_tag_pattern = r'<answer>(.*?)</answer>'
@@ -153,8 +165,9 @@ def run(rank, world_size, args):
                 response = response[0]
                 
                 gt_bbox = item["bbox"]
-                pred_coord, _ = extract_coord(response)
-                pred_coord = [int(pred_coord[0] * scale_x), int(pred_coord[1] * scale_y)]
+                pred_coord, _ = extract_bbox(response)
+                pred_coord = [int(pred_coord[0] * scale_x), int(pred_coord[1] * scale_y), int(pred_coord[2] * scale_x), int(pred_coord[3] * scale_y)]
+                pred_coord = [pred_coord[0] + ((pred_coord[0]+ pred_coord[2])/2), pred_coord[1] + ((pred_coord[1]+pred_coord[3])/2)]
 
                 success = gt_bbox[0] <= pred_coord[0] <= gt_bbox[2] and gt_bbox[1] <= pred_coord[1] <= gt_bbox[3]
                 if success:
