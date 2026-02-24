@@ -266,7 +266,7 @@ def soft_reward(completions, solution, scales, **kwargs):
 
     soft_fn = make_sigmoid_box_reward(tau=6.0)
     # initially 10 and 0.15
-    boundary_fn = make_boundary_reward(mode="sigmoid", beta=3, kappa=0.3)
+    boundary_fn = make_boundary_reward(mode="sigmoid", beta=5, kappa=0.3)
     hit_fn = make_hit_reward()
 
     for content, sol,scale in zip(contents, solution,scales):
