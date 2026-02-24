@@ -1,4 +1,4 @@
-jsonl_file = '/home/teliang/scratch/UI-R1/ckpt/DAST_Full_Gaussian_Qwen2.5-VL/infer/prediction_results_ScreenSpot-pro-all.jsonl'
+jsonl_file = '/home/teliang/scratch/UI-R1/ckpt/Soft_base_bk_Qwen2.5/infer/prediction_results_ScreenSpot-pro-all.jsonl'
 ref_dir = "/home/teliang/scratch/screenspot_pro/annotations"
 import os
 import json
