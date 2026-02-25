@@ -109,10 +109,12 @@ def run(rank, world_size, args):
 
             question_template = (
                 f"In this UI screenshot, I want to perform the command '{task_prompt}'.\n"
-                f"Please provide the action to perform (enumerate in 'click' and 'scroll') and the coordinate where the cursor is moved to(integer) if click is performed.\n"
-                "Output the thinking process in <think> </think> and final answer in <answer> </answer> tags."
+                "Please provide the action to perform (enumerate in ['click']) "
+                "and the target bounding box (integers) for the UI element to click.\n"
+                "Return the box as [x1, y1, x2, y2] where (x1, y1) is top-left and (x2, y2) is bottom-right.\n"
+                "Output the thinking process in <think> </think> and final answer in <answer> </answer> tags.\n"
                 "The output answer format should be as follows:\n"
-                "<think> ... </think> <answer>[{'action': enum['click','scroll'], 'coordinate': [x, y]}]</answer>\n"
+                "<think> ... </think> <answer>[{'action': 'click', 'box': [x1, y1, x2, y2]}]</answer>\n"
                 "Please strictly follow the format."
             )
             # w/o thinking
@@ -166,8 +168,8 @@ def run(rank, world_size, args):
                 
                 gt_bbox = item["bbox"]
                 pred_coord, _ = extract_bbox(response)
-                pred_coord = [int(pred_coord[0] * scale_x), int(pred_coord[1] * scale_y), int(pred_coord[2] * scale_x), int(pred_coord[3] * scale_y)]
-                pred_coord = [pred_coord[0] + ((pred_coord[0]+ pred_coord[2])/2), pred_coord[1] + ((pred_coord[1]+pred_coord[3])/2)]
+                pred_coord = [pred_coord[0] * scale_x, pred_coord[1] * scale_y, pred_coord[2] * scale_x, pred_coord[3] * scale_y]
+                pred_coord = [int((pred_coord[0]+ pred_coord[2])/2), int((pred_coord[1]+pred_coord[3])/2)]
 
                 success = gt_bbox[0] <= pred_coord[0] <= gt_bbox[2] and gt_bbox[1] <= pred_coord[1] <= gt_bbox[3]
                 if success:
