@@ -151,6 +151,7 @@ def make_sigmoid_box_reward(tau: float = 6.0, eps: float = 1e-9):
         # tau = max(2.0, min(8.0, 0.15 * s))
 
         # 4 soft constraints (left, right, bottom, top)
+        # if tau is small then rewards negative or positive are amplified (either very big or very small)
         s_left   = sigmoid((px - x1) / (tau + eps))
         s_right  = sigmoid((x2 - px) / (tau + eps))
         s_bottom = sigmoid((py - y1) / (tau + eps))
@@ -286,12 +287,12 @@ def soft_reward(completions, solution, scales, **kwargs):
                         boundary_fn=boundary_fn,
                         hit_fn=hit_fn,
                         lambda_soft=0.5,
-                        lambda_boundary=0.3,
-                        lambda_hit=0.2,
+                        lambda_boundary=0.28,
+                        lambda_hit=0.22,
                     )
                     reward = combined_reward(student_answer_coord, ground_truth_bbox)
                 else:
-                    reward = 3.0
+                    reward = 3
             else:
                 reward = 0.0
         except Exception:
